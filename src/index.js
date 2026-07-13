@@ -7,6 +7,11 @@ const { createToken, authMiddleware } = require("./auth");
 const { send2FACode, verify2FACode, isGlobal2FAEnabled } = require("./telegram");
 const { adminMiddleware } = require("./admin");
 const db = require("./db");
+const { buildFinanceReport } = require("./financeParser");
+
+function isWebClient(req) {
+  return String(req.headers["x-client"] || "").toLowerCase() === "web";
+}
 
 const app = express();
 app.use(cors());
@@ -144,6 +149,7 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
   res.json({
     username: user.username,
     userId: user.id,
+    twoFactorEnabled: !!user.twoFactorEnabled,
     firebaseProjects: db.getFirebaseProjects(user.id),
   });
 });
@@ -151,7 +157,7 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
 // ─── Firebase Projects (per user) ───────────────────────────
 app.get("/api/firebase-projects", authMiddleware, (req, res) => {
   try {
-    const projects = db.getFirebaseProjects(req.user.sub);
+    const projects = db.getFirebaseProjects(req.user.sub, isWebClient(req));
     res.json({ projects });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -161,11 +167,14 @@ app.get("/api/firebase-projects", authMiddleware, (req, res) => {
 app.post("/api/firebase-projects", authMiddleware, async (req, res) => {
   try {
     const { name, firebaseUrl, firebaseSecret } = req.body || {};
-    const project = db.addFirebaseProject(req.user.sub, { name, firebaseUrl, firebaseSecret });
-    await testConnection(
-      db.getFirebaseProject(req.user.sub, project.id).firebaseUrl,
-      db.getFirebaseProject(req.user.sub, project.id).firebaseSecret
+    const web = isWebClient(req);
+    const project = db.addFirebaseProject(
+      req.user.sub,
+      { name, firebaseUrl, firebaseSecret },
+      web
     );
+    const full = db.getFirebaseProject(req.user.sub, project.id);
+    await testConnection(full.firebaseUrl, full.firebaseSecret);
     res.status(201).json({ ok: true, project });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -174,7 +183,13 @@ app.post("/api/firebase-projects", authMiddleware, async (req, res) => {
 
 app.put("/api/firebase-projects/:projectId", authMiddleware, async (req, res) => {
   try {
-    const project = db.updateFirebaseProject(req.user.sub, req.params.projectId, req.body || {});
+    const web = isWebClient(req);
+    const project = db.updateFirebaseProject(
+      req.user.sub,
+      req.params.projectId,
+      req.body || {},
+      web
+    );
     const full = db.getFirebaseProject(req.user.sub, project.id);
     await testConnection(full.firebaseUrl, full.firebaseSecret);
     res.json({ ok: true, project });
@@ -271,6 +286,26 @@ app.get("/api/projects/:projectId/messages/:deviceId", authMiddleware, async (re
       `messages/${req.params.deviceId}`
     );
     res.json(data || {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/projects/:projectId/finance/:deviceId", authMiddleware, async (req, res) => {
+  const project = resolveProject(req, res);
+  if (!project) return;
+  try {
+    const messages = await firebaseGet(
+      project.firebaseUrl,
+      project.firebaseSecret,
+      `messages/${req.params.deviceId}`
+    );
+    const report = buildFinanceReport(messages);
+    res.json({
+      deviceId: req.params.deviceId,
+      projectName: project.name,
+      ...report,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
