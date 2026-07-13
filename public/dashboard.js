@@ -61,11 +61,56 @@
 
   function parseTs(val) {
     if (val == null || val === "") return null;
-    if (typeof val === "number") return val < 1e12 ? val * 1000 : val;
-    const n = Number(val);
-    if (!isNaN(n) && String(val).match(/^\d+$/)) return n < 1e12 ? n * 1000 : n;
-    const d = new Date(val);
+    if (typeof val === "number") {
+      if (!isFinite(val) || val <= 0) return null;
+      return val < 1e12 ? val * 1000 : val;
+    }
+    const s = String(val).trim();
+    if (!s || s === "—" || s === "-" || s.toLowerCase() === "null") return null;
+    if (/^\d+$/.test(s)) {
+      const n = Number(s);
+      if (!isFinite(n) || n <= 0) return null;
+      return n < 1e12 ? n * 1000 : n;
+    }
+    // dd/MM/yyyy | hh:mm:ss am  OR  dd-MM-yyyy | hh:mm pm
+    const m1 = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\s*[|T\s]\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?/i);
+    if (m1) {
+      let year = Number(m1[3]);
+      if (year < 100) year += 2000;
+      let hour = Number(m1[4]);
+      const min = Number(m1[5]);
+      const sec = Number(m1[6] || 0);
+      const ap = (m1[7] || "").toLowerCase();
+      if (ap === "pm" && hour < 12) hour += 12;
+      if (ap === "am" && hour === 12) hour = 0;
+      const d = new Date(year, Number(m1[2]) - 1, Number(m1[1]), hour, min, sec);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+    const d = new Date(s);
     return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  function pickLastSeen(raw) {
+    const keys = [
+      "lastSeen", "last_seen", "lastOnline", "last_online", "lastActive", "last_active",
+      "updatedAt", "updated_at", "dateTime", "date_time", "datetime", "date",
+      "time", "timestamp", "registeredAt", "registered_at", "createdAt", "created_at",
+      "installDate", "install_date", "onlineTime", "connectedAt", "loginTime"
+    ];
+    for (const k of keys) {
+      if (raw[k] != null && raw[k] !== "") {
+        const ts = parseTs(raw[k]);
+        if (ts) return ts;
+      }
+    }
+    // scan unknown keys
+    for (const [k, v] of Object.entries(raw)) {
+      if (/date|seen|time|online|active|update|regist/i.test(k) && typeof v !== "object") {
+        const ts = parseTs(v);
+        if (ts) return ts;
+      }
+    }
+    return null;
   }
 
   function fmtDate(ts) {
@@ -101,10 +146,9 @@
   function parseDevice(id, raw) {
     if (!raw || typeof raw !== "object") return null;
     const sims = parseSims(raw.sims);
-    const lastSeen = parseTs(
-      raw.lastSeen ?? raw.last_seen ?? raw.lastOnline ?? raw.last_online ??
-      raw.lastActive ?? raw.updatedAt ?? raw.dateTime ?? raw.time
-    );
+    let lastSeen = pickLastSeen(raw);
+    // Online devices with no timestamp → treat as now so modal isn't blank
+    if (!lastSeen && raw.status === true) lastSeen = Date.now();
     return {
       id,
       name: String(raw.modelName || raw.model || raw.deviceName || id),
@@ -893,7 +937,10 @@
     $("modalLastSeenStatus").textContent = d.status ? "Online" : "Offline";
     $("modalLastSeenStatus").className = "val " + (d.status ? "green" : "orange");
     $("modalLastSeenDot").className = "dot " + (d.status ? "green" : "red");
-    $("modalLastSeenTime").textContent = d.lastSeenFmt;
+    const timeText = d.lastSeenFmt && d.lastSeenFmt !== "—"
+      ? d.lastSeenFmt
+      : (d.status ? fmtDate(Date.now()) : "—");
+    $("modalLastSeenTime").textContent = timeText;
     show("modalLastSeen", true);
   }
 
