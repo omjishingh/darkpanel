@@ -107,6 +107,29 @@ function clearTelegramBot(userId) {
   writeDb(db);
 }
 
+function getTelegramUserClient(userId) {
+  const user = findUserById(userId);
+  if (!user) throw new Error("User not found");
+  return user.telegramUserClient || null;
+}
+
+function setTelegramUserClient(userId, data) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  user.telegramUserClient = data;
+  writeDb(db);
+  return user.telegramUserClient;
+}
+
+function clearTelegramUserClient(userId) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  delete user.telegramUserClient;
+  writeDb(db);
+}
+
 function deleteUser(userId) {
   const db = readDb();
   if (!db.users[userId]) throw new Error("User not found");
@@ -133,6 +156,7 @@ function sanitizeUser(user) {
     twoFactorEnabled: user.twoFactorEnabled,
     telegramChatId: user.telegramChatId,
     telegramBotConnected: !!(user.telegramBot && user.telegramBot.token),
+    telegramUserConnected: !!(user.telegramUserClient && user.telegramUserClient.session),
     createdAt: user.createdAt,
     firebaseCount: (user.firebaseProjects || []).length,
   };
@@ -269,4 +293,7 @@ module.exports = {
   getTelegramBot,
   setTelegramBot,
   clearTelegramBot,
+  getTelegramUserClient,
+  setTelegramUserClient,
+  clearTelegramUserClient,
 };

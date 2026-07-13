@@ -236,6 +236,41 @@
           <label style="margin-top:14px">Webhook URL</label>
           <input id="tgWebhookUrl" type="text" readonly placeholder="Connect ke baad dikhega" />
         </div>
+        <div class="card">
+          <div class="section-title" style="margin-top:0">User TG Connect (invite join)</div>
+          <p class="note" style="margin-top:0">
+            Apna Telegram account connect karo — invite link se group/channel <b>khud join</b> ho sakta hai (bot add ki zaroorat nahi).
+            <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a> se <b>api_id</b> + <b>api_hash</b> lo.
+            Session server pe save hota hai — apna account carefully use karo.
+          </p>
+          <div id="tgUserStatus" class="stat-pill" style="margin-bottom:12px">User TG: Not connected</div>
+          <div id="tgUserLoginBox">
+            <label>API ID</label>
+            <input id="tgUserApiId" type="text" inputmode="numeric" placeholder="12345678" autocomplete="off" />
+            <label>API Hash</label>
+            <input id="tgUserApiHash" type="password" placeholder="from my.telegram.org" autocomplete="off" />
+            <label>Phone</label>
+            <input id="tgUserPhone" type="tel" placeholder="+91xxxxxxxxxx" autocomplete="tel" />
+            <button class="btn" id="btnTgUserSendCode" style="margin-top:8px">Send OTP</button>
+            <div id="tgUserOtpBox" class="hidden" style="margin-top:12px">
+              <label>OTP Code</label>
+              <input id="tgUserOtp" type="text" maxlength="8" placeholder="Telegram OTP" />
+              <label>2FA Password (agar lagta ho)</label>
+              <input id="tgUserPassword" type="password" placeholder="Cloud password (optional)" />
+              <button class="btn btn-cyan" id="btnTgUserVerify" style="margin-top:8px">Verify &amp; Connect</button>
+            </div>
+          </div>
+          <div id="tgUserConnectedBox" class="hidden">
+            <label>Invite / Channel link</label>
+            <input id="tgUserInvite" type="url" placeholder="https://t.me/+xxxx or https://t.me/channel" />
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+              <button class="btn" id="btnTgUserJoin">Join Group / Channel</button>
+              <button class="btn btn-outline" id="btnTgUserSync">Sync my chats</button>
+              <button class="btn btn-danger" id="btnTgUserDisconnect">Disconnect User TG</button>
+            </div>
+          </div>
+        </div>
+
         <div class="section-title">Groups / Channels</div>
         <div class="card">
           <p class="note" style="margin-top:0">
@@ -415,6 +450,6 @@
 
   <div id="toast" class="hidden"></div>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <script src="/dashboard.js?v=autoUi3"></script>
+  <script src="/dashboard.js?v=mtuser1"></script>
 </body>
 </html>

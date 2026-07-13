@@ -15,6 +15,7 @@ const { adminMiddleware } = require("./admin");
 const db = require("./db");
 const { buildFinanceReport } = require("./financeParser");
 const telegramUser = require("./telegramUser");
+const telegramMt = require("./telegramMtClient");
 
 function isWebClient(req) {
   return String(req.headers["x-client"] || "").toLowerCase() === "web";
@@ -512,11 +513,38 @@ app.get("/api/telegram/groups", authMiddleware, (req, res) => {
   try {
     const user = db.findUserById(req.user.sub);
     if (!user) return res.status(404).json({ error: "User not found" });
-    const groups = telegramUser.sanitizeBot(user).groups;
+    const botGroups = (telegramUser.sanitizeBot(user).groups || []).map((g) => ({
+      ...g,
+      source: "bot",
+    }));
+    const userGroups = (telegramMt.sanitizeUserTg(req.user.sub).groups || []).map((g) => ({
+      ...g,
+      source: "user",
+    }));
+    // merge unique by chatId (prefer user source title if both)
+    const map = new Map();
+    for (const g of botGroups) map.set(String(g.chatId), g);
+    for (const g of userGroups) {
+      const prev = map.get(String(g.chatId));
+      if (!prev) map.set(String(g.chatId), g);
+      else {
+        map.set(String(g.chatId), {
+          ...prev,
+          title: g.title || prev.title,
+          autoSend: g.autoSend || prev.autoSend,
+          source: prev.autoSend ? prev.source : g.source,
+          sources: ["bot", "user"],
+        });
+      }
+    }
+    const groups = Array.from(map.values());
     const deviceId = req.query.deviceId;
-    const binding = deviceId
-      ? telegramUser.findDeviceAutoSend(req.user.sub, deviceId)
-      : null;
+    let binding = null;
+    if (deviceId) {
+      binding =
+        telegramMt.findUserDeviceAutoSend(req.user.sub, deviceId) ||
+        telegramUser.findDeviceAutoSend(req.user.sub, deviceId);
+    }
     res.json({ groups, binding });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -525,8 +553,19 @@ app.get("/api/telegram/groups", authMiddleware, (req, res) => {
 
 app.post("/api/telegram/groups/refresh", authMiddleware, async (req, res) => {
   try {
-    const result = await telegramUser.refreshGroupTitles(req.user.sub);
-    res.json(result);
+    let botResult = { updated: 0, groups: [] };
+    let userResult = { count: 0, groups: [] };
+    try {
+      botResult = await telegramUser.refreshGroupTitles(req.user.sub);
+    } catch (_) {}
+    try {
+      userResult = await telegramMt.syncDialogs(req.user.sub);
+    } catch (_) {}
+    res.json({
+      ok: true,
+      botUpdated: botResult.updated || 0,
+      userSynced: userResult.count || 0,
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -534,9 +573,12 @@ app.post("/api/telegram/groups/refresh", authMiddleware, async (req, res) => {
 
 app.post("/api/telegram/groups", authMiddleware, async (req, res) => {
   try {
-    const { chatId, title, type } = req.body || {};
+    const { chatId, title, type, source } = req.body || {};
     if (!chatId) return res.status(400).json({ error: "chatId required" });
-    const row = telegramUser.upsertGroup(req.user.sub, { chatId, title, type: type || "group" });
+    const row =
+      source === "user"
+        ? telegramMt.upsertUserGroup(req.user.sub, { chatId, title, type: type || "group" })
+        : telegramUser.upsertGroup(req.user.sub, { chatId, title, type: type || "group" });
     res.status(201).json({ ok: true, group: row });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -545,7 +587,16 @@ app.post("/api/telegram/groups", authMiddleware, async (req, res) => {
 
 app.delete("/api/telegram/groups/:chatId", authMiddleware, (req, res) => {
   try {
-    telegramUser.deleteGroup(req.user.sub, req.params.chatId);
+    let ok = false;
+    try {
+      telegramUser.deleteGroup(req.user.sub, req.params.chatId);
+      ok = true;
+    } catch (_) {}
+    try {
+      telegramMt.deleteUserGroup(req.user.sub, req.params.chatId);
+      ok = true;
+    } catch (_) {}
+    if (!ok) return res.status(400).json({ error: "Group not found" });
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -554,18 +605,35 @@ app.delete("/api/telegram/groups/:chatId", authMiddleware, (req, res) => {
 
 app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) => {
   try {
-    const { projectId, deviceId, deviceName } = req.body || {};
+    const { projectId, deviceId, deviceName, source } = req.body || {};
     if (!projectId || !deviceId) {
       return res.status(400).json({ error: "projectId and deviceId required" });
     }
     db.getFirebaseProject(req.user.sub, projectId);
-    // one device → one group (clear previous binds for this device)
     telegramUser.clearDeviceAutoSend(req.user.sub, deviceId);
-    const g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, {
+    telegramMt.clearUserDeviceAutoSend(req.user.sub, deviceId);
+
+    const payload = {
       projectId,
       deviceId,
       deviceName: deviceName || deviceId,
-    });
+    };
+
+    let g = null;
+    const preferUser = source === "user";
+    if (preferUser) {
+      try {
+        g = telegramMt.setUserGroupAutoSend(req.user.sub, req.params.chatId, payload);
+      } catch (_) {
+        g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, payload);
+      }
+    } else {
+      try {
+        g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, payload);
+      } catch (_) {
+        g = telegramMt.setUserGroupAutoSend(req.user.sub, req.params.chatId, payload);
+      }
+    }
     res.json({ ok: true, group: g });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -574,7 +642,14 @@ app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) =>
 
 app.delete("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) => {
   try {
-    const g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, null);
+    let g = null;
+    try {
+      g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, null);
+    } catch (_) {}
+    try {
+      g = telegramMt.setUserGroupAutoSend(req.user.sub, req.params.chatId, null) || g;
+    } catch (_) {}
+    if (!g) return res.status(400).json({ error: "Group not found" });
     res.json({ ok: true, group: g });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -585,8 +660,68 @@ app.delete("/api/telegram/auto-send", authMiddleware, (req, res) => {
   try {
     const deviceId = req.query.deviceId || req.body?.deviceId;
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
-    const result = telegramUser.clearDeviceAutoSend(req.user.sub, deviceId);
+    const a = telegramUser.clearDeviceAutoSend(req.user.sub, deviceId);
+    const b = telegramMt.clearUserDeviceAutoSend(req.user.sub, deviceId);
+    res.json({ ok: true, cleared: (a.cleared || 0) + (b.cleared || 0) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ─── Telegram USER account (MTProto) ────────────────────────
+app.get("/api/telegram/user", authMiddleware, (req, res) => {
+  try {
+    res.json(telegramMt.sanitizeUserTg(req.user.sub));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/user/send-code", authMiddleware, async (req, res) => {
+  try {
+    const { apiId, apiHash, phone } = req.body || {};
+    const result = await telegramMt.startCode(req.user.sub, { apiId, apiHash, phone });
     res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/user/verify", authMiddleware, async (req, res) => {
+  try {
+    const { code, password } = req.body || {};
+    const result = await telegramMt.verifyCode(req.user.sub, { code, password });
+    if (result.needPassword) return res.json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/user/join", authMiddleware, async (req, res) => {
+  try {
+    const { link } = req.body || {};
+    if (!link) return res.status(400).json({ error: "Invite / channel link required" });
+    const result = await telegramMt.joinByInvite(req.user.sub, link);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/user/sync", authMiddleware, async (req, res) => {
+  try {
+    const result = await telegramMt.syncDialogs(req.user.sub);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/telegram/user", authMiddleware, async (req, res) => {
+  try {
+    const result = await telegramMt.disconnectUser(req.user.sub);
+    res.json({ ok: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -630,4 +765,7 @@ app.listen(port, () => {
   console.log(`Web Panel: http://localhost:${port}/`);
   console.log(`Admin key: ${process.env.ADMIN_KEY ? "SET" : "NOT SET — set ADMIN_KEY in .env"}`);
   console.log(`Global 2FA: ${isGlobal2FAEnabled() ? "ON" : "OFF"}`);
+  setTimeout(() => {
+    telegramMt.restoreAllClients().catch((e) => console.warn("[mt-client] restore:", e.message));
+  }, 1500);
 });
