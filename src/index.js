@@ -252,8 +252,9 @@ app.get("/api/projects/:projectId/dashboard", authMiddleware, async (req, res) =
     for (const id of deviceIds.slice(0, 50)) {
       try {
         messages[id] = await firebaseGet(project.firebaseUrl, project.firebaseSecret, `messages/${id}`);
+        if (messages[id] == null) messages[id] = {};
       } catch {
-        messages[id] = null;
+        messages[id] = {};
       }
     }
     res.json({
