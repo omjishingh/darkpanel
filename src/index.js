@@ -14,6 +14,7 @@ const {
 const { adminMiddleware } = require("./admin");
 const db = require("./db");
 const { buildFinanceReport } = require("./financeParser");
+const telegramUser = require("./telegramUser");
 
 function isWebClient(req) {
   return String(req.headers["x-client"] || "").toLowerCase() === "web";
@@ -173,8 +174,45 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
     username: user.username,
     userId: user.id,
     twoFactorEnabled: !!user.twoFactorEnabled,
+    telegramChatId: user.telegramChatId || null,
+    telegramBotConnected: !!(user.telegramBot && user.telegramBot.token),
+    global2FA: isGlobal2FAEnabled(),
     firebaseProjects: db.getFirebaseProjects(user.id),
   });
+});
+
+app.patch("/api/auth/me", authMiddleware, (req, res) => {
+  try {
+    const { twoFactorEnabled, telegramChatId } = req.body || {};
+    const updates = {};
+    if (twoFactorEnabled !== undefined) updates.twoFactorEnabled = !!twoFactorEnabled;
+    if (telegramChatId !== undefined) {
+      const id = String(telegramChatId || "").trim();
+      updates.telegramChatId = id || null;
+    }
+    if (updates.twoFactorEnabled) {
+      const current = db.findUserById(req.user.sub);
+      const chat =
+        updates.telegramChatId !== undefined
+          ? updates.telegramChatId
+          : current?.telegramChatId;
+      if (!chat && !process.env.TELEGRAM_CHAT_ID) {
+        return res.status(400).json({
+          error: "2FA on karne se pehle apna Telegram Chat ID save karo",
+        });
+      }
+    }
+    const user = db.updateUser(req.user.sub, updates);
+    res.json({
+      ok: true,
+      username: user.username,
+      userId: user.id,
+      twoFactorEnabled: !!user.twoFactorEnabled,
+      telegramChatId: user.telegramChatId || null,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // ─── Firebase Projects (per user) ───────────────────────────
@@ -423,6 +461,133 @@ app.get("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, async
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── User Telegram bot (SMS auto / groups) ──────────────────
+app.get("/api/telegram/bot", authMiddleware, (req, res) => {
+  try {
+    const user = db.findUserById(req.user.sub);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    const info = telegramUser.sanitizeBot(user);
+    if (info.connected) {
+      const bot = db.getTelegramBot(req.user.sub);
+      info.webhookUrl = telegramUser.webhookUrlFor(req, req.user.sub, bot.webhookSecret);
+    }
+    res.json(info);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/bot", authMiddleware, async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    const info = await telegramUser.connectBot(req.user.sub, token, req);
+    res.json({ ok: true, ...info });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/bot/webhook", authMiddleware, async (req, res) => {
+  try {
+    const result = await telegramUser.refreshWebhook(req.user.sub, req);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/telegram/bot", authMiddleware, async (req, res) => {
+  try {
+    const result = await telegramUser.disconnectBot(req.user.sub);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/telegram/groups", authMiddleware, (req, res) => {
+  try {
+    const user = db.findUserById(req.user.sub);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json({ groups: telegramUser.sanitizeBot(user).groups });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/groups", authMiddleware, async (req, res) => {
+  try {
+    const { chatId, title, type } = req.body || {};
+    if (!chatId) return res.status(400).json({ error: "chatId required" });
+    const row = telegramUser.upsertGroup(req.user.sub, { chatId, title, type: type || "group" });
+    res.status(201).json({ ok: true, group: row });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/telegram/groups/:chatId", authMiddleware, (req, res) => {
+  try {
+    telegramUser.deleteGroup(req.user.sub, req.params.chatId);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) => {
+  try {
+    const { projectId, deviceId, deviceName } = req.body || {};
+    if (!projectId || !deviceId) {
+      return res.status(400).json({ error: "projectId and deviceId required" });
+    }
+    db.getFirebaseProject(req.user.sub, projectId);
+    const g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, {
+      projectId,
+      deviceId,
+      deviceName: deviceName || deviceId,
+    });
+    res.json({ ok: true, group: g });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) => {
+  try {
+    const g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, null);
+    res.json({ ok: true, group: g });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/groups/:chatId/send-intercept", authMiddleware, async (req, res) => {
+  try {
+    const { to, message } = req.body || {};
+    if (!to || !message) return res.status(400).json({ error: "to and message required" });
+    await telegramUser.postInterceptToGroup(req.user.sub, req.params.chatId, to, message);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/webhook/:userId/:secret", async (req, res) => {
+  try {
+    const headerSecret = req.headers["x-telegram-bot-api-secret-token"];
+    const result = await telegramUser.handleWebhook(
+      req.params.userId,
+      req.params.secret,
+      req.body || {},
+      headerSecret
+    );
+    res.json(result);
+  } catch (err) {
+    res.status(200).json({ ok: false, error: err.message });
   }
 });
 

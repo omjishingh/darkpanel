@@ -62,6 +62,7 @@
       <div class="nav-item" data-view="devices">📱 Devices</div>
       <div class="nav-section">Apps &amp; Pages</div>
       <div class="nav-item" data-view="projects">🔥 Firebase</div>
+      <div class="nav-item" data-view="telegram">🤖 Telegram &amp; 2FA</div>
       <div class="nav-item" data-view="favorites">⭐ Favorites</div>
       <div class="nav-spacer"></div>
       <div class="nav-item" id="btnLogout">Logout</div>
@@ -192,6 +193,55 @@
         </div>
       </div>
 
+      <!-- TELEGRAM BOT + 2FA -->
+      <div id="viewTelegram" class="hidden">
+        <div class="topbar"><h2>Telegram &amp; 2FA</h2></div>
+
+        <div class="card">
+          <div class="section-title" style="margin-top:0">Login 2FA (OTP)</div>
+          <p class="note" style="margin-top:0">Login pe OTP Telegram par aayega. Server pe <code>TELEGRAM_BOT_TOKEN</code> set hona chahiye (Render env). Apna personal Chat ID yahan save karo — @userinfobot se milta hai.</p>
+          <label>Your Telegram Chat ID</label>
+          <input id="tg2faChatId" type="text" placeholder="e.g. 123456789" />
+          <label style="display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer">
+            <input id="tg2faEnabled" type="checkbox" style="width:auto;margin:0" />
+            <span>Enable Telegram 2FA on login</span>
+          </label>
+          <div id="tg2faGlobalNote" class="note" style="display:none">Server pe global 2FA ON hai — har login pe OTP lagega.</div>
+          <button class="btn" id="btnSave2fa" style="margin-top:12px">Save 2FA Settings</button>
+        </div>
+
+        <div class="card">
+          <div class="section-title" style="margin-top:0">SMS Auto Bot (apna bot)</div>
+          <p class="note" style="margin-top:0">@BotFather se token lo → connect → bot ko group/channel me add karo. Webhook auto set hoga. Group me SMS format aate hi bind device pe auto send.</p>
+          <div id="tgBotStatus" class="stat-pill" style="margin-bottom:12px">Not connected</div>
+          <label>Bot Token</label>
+          <input id="tgBotToken" type="password" placeholder="123456:AA...." autocomplete="off" />
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn" id="btnTgConnect">Connect &amp; Set Webhook</button>
+            <button class="btn btn-outline" id="btnTgRefreshWh">Refresh Webhook</button>
+            <button class="btn btn-danger" id="btnTgDisconnect">Disconnect</button>
+          </div>
+          <label style="margin-top:14px">Webhook URL</label>
+          <input id="tgWebhookUrl" type="text" readonly placeholder="Connect ke baad dikhega" />
+        </div>
+        <div class="section-title">Groups / Channels</div>
+        <div class="card">
+          <p class="note" style="margin-top:0">Bot add karo group me — ID auto save. Manual bhi add kar sakte ho (/id command bhi chalega).</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <div style="flex:1;min-width:140px">
+              <label>Chat / Channel ID</label>
+              <input id="tgManualChatId" type="text" placeholder="-100xxxxxxxxxx" />
+            </div>
+            <div style="flex:1;min-width:140px">
+              <label>Title (optional)</label>
+              <input id="tgManualTitle" type="text" placeholder="My Group" />
+            </div>
+            <button class="btn btn-sm" id="btnTgAddGroup">Add</button>
+          </div>
+          <div id="tgGroupList" style="margin-top:14px"><div class="empty">No groups yet</div></div>
+        </div>
+      </div>
+
       <!-- DEVICE DETAIL -->
       <div id="viewDetail" class="hidden">
         <div class="detail-header">
@@ -236,12 +286,20 @@
             </div>
             <div id="panelSend" class="hidden">
               <label>Recipient Phone No.</label>
-              <input id="smsTo" type="tel" placeholder="Enter phone number" />
+              <div style="display:flex;gap:8px;align-items:center">
+                <input id="smsTo" type="tel" placeholder="Enter phone number" style="flex:1;margin:0" />
+                <button type="button" class="btn btn-sm btn-outline" id="btnPasteSmsTo">Paste</button>
+              </div>
               <label>Message</label>
-              <textarea id="smsMsg" rows="3" placeholder="Enter message to send"></textarea>
+              <div style="display:flex;gap:8px;align-items:flex-start">
+                <textarea id="smsMsg" rows="3" placeholder="Enter message to send" style="flex:1;margin:0"></textarea>
+                <button type="button" class="btn btn-sm btn-outline" id="btnPasteSmsMsg">Paste</button>
+              </div>
               <label>SIM</label>
               <select id="smsSim"><option value="1">SIM 1</option><option value="2">SIM 2</option></select>
               <button class="btn btn-block" id="btnSendSms">Send via Device</button>
+              <button class="btn btn-block btn-cyan" id="btnSendAuto" style="margin-top:8px">Send Auto (TG Group)</button>
+              <p class="note">Send Auto: group choose karo — us group me SMS Intercepted format aate hi number+msg ise device se turant send.</p>
             </div>
           </div>
         </div>

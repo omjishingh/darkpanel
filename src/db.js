@@ -77,8 +77,34 @@ function updateUser(userId, updates) {
   if (updates.telegramChatId !== undefined) {
     user.telegramChatId = updates.telegramChatId;
   }
+  if (updates.telegramBot !== undefined) {
+    user.telegramBot = updates.telegramBot;
+  }
   writeDb(db);
   return sanitizeUser(user);
+}
+
+function getTelegramBot(userId) {
+  const user = findUserById(userId);
+  if (!user) throw new Error("User not found");
+  return user.telegramBot || null;
+}
+
+function setTelegramBot(userId, bot) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  user.telegramBot = bot;
+  writeDb(db);
+  return user.telegramBot;
+}
+
+function clearTelegramBot(userId) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  delete user.telegramBot;
+  writeDb(db);
 }
 
 function deleteUser(userId) {
@@ -106,6 +132,7 @@ function sanitizeUser(user) {
     username: user.username,
     twoFactorEnabled: user.twoFactorEnabled,
     telegramChatId: user.telegramChatId,
+    telegramBotConnected: !!(user.telegramBot && user.telegramBot.token),
     createdAt: user.createdAt,
     firebaseCount: (user.firebaseProjects || []).length,
   };
@@ -239,4 +266,7 @@ module.exports = {
   addFirebaseProject,
   updateFirebaseProject,
   deleteFirebaseProject,
+  getTelegramBot,
+  setTelegramBot,
+  clearTelegramBot,
 };
