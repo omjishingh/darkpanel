@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DARK PANEL — Account Control</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0a0a0a;
+      color: #e5e5e5;
+      min-height: 100vh;
+    }
+    .wrap { max-width: 480px; margin: 0 auto; padding: 24px 16px; }
+    .wrap-wide { max-width: 720px; }
+    h1 { font-size: 1.75rem; font-weight: 800; font-style: italic; }
+    h1 span { color: #6acfff; }
+    .sub { color: #666; font-size: 0.85rem; margin: 8px 0 24px; }
+    .card {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    label { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 6px; font-weight: 600; }
+    input {
+      width: 100%;
+      padding: 12px 14px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 0.9rem;
+      margin-bottom: 14px;
+    }
+    input:focus { outline: none; border-color: #dc2626; }
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      cursor: pointer;
+      background: linear-gradient(135deg, #dc2626, #991b1b);
+      color: #fff;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid #333;
+      color: #aaa;
+      margin-top: 10px;
+    }
+    .btn-sm { width: auto; padding: 8px 14px; font-size: 0.75rem; }
+    .btn-danger { background: #7f1d1d; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+    .tab {
+      flex: 1;
+      padding: 10px;
+      text-align: center;
+      border-radius: 8px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      color: #888;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+    .tab.active { border-color: #dc2626; color: #fff; background: #1a0a0a; }
+    .err { color: #f87171; font-size: 0.85rem; margin-bottom: 12px; text-align: center; }
+    .ok { color: #4ade80; font-size: 0.85rem; margin-bottom: 12px; text-align: center; }
+    .hidden { display: none !important; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .user-badge { font-size: 0.8rem; color: #888; }
+    .user-badge b { color: #6acfff; }
+    .fb-item {
+      background: #0d0d0d;
+      border: 1px solid #1e1e1e;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .fb-name { font-weight: 700; font-size: 1rem; color: #fff; }
+    .fb-url { font-size: 0.7rem; color: #555; font-family: monospace; margin-top: 4px; word-break: break-all; }
+    .fb-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #555; margin: 20px 0 10px; font-weight: 700; }
+    .note { font-size: 0.75rem; color: #555; line-height: 1.5; margin-top: 16px; padding: 12px; background: #0d0d0d; border-radius: 8px; border: 1px solid #1a1a1a; }
+  </style>
+</head>
+<body>
+  <div id="authView" class="wrap">
+    <h1><span>DARK</span> PANEL</h1>
+    <p class="sub">Account Control — Web se login, register & Firebase manage karo</p>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="login">Login</div>
+      <div class="tab" data-tab="register">Register</div>
+    </div>
+
+    <div id="loginPanel" class="card">
+      <div id="loginErr" class="err hidden"></div>
+      <label>Username</label>
+      <input id="loginUser" type="text" placeholder="Your username" autocomplete="username" />
+      <label>Password</label>
+      <input id="loginPass" type="password" placeholder="Your password" autocomplete="current-password" />
+      <button class="btn" id="btnLogin">Login</button>
+    </div>
+
+    <div id="registerPanel" class="card hidden">
+      <div id="regErr" class="err hidden"></div>
+      <div id="regOk" class="ok hidden"></div>
+      <label>Admin Key</label>
+      <input id="regAdminKey" type="password" placeholder="ADMIN_KEY from server" />
+      <label>Username</label>
+      <input id="regUser" type="text" placeholder="New username" />
+      <label>Password</label>
+      <input id="regPass" type="password" placeholder="New password" />
+      <label>Confirm Password</label>
+      <input id="regPass2" type="password" placeholder="Confirm password" />
+      <button class="btn" id="btnRegister">Create Account</button>
+      <p class="note">Sirf Admin Key wale naya account bana sakte hain. APK mein sirf login hai.</p>
+    </div>
+
+    <div id="twofaPanel" class="card hidden">
+      <p class="sub">Telegram par OTP aaya hai — code daalo</p>
+      <div id="twofaErr" class="err hidden"></div>
+      <label>OTP Code</label>
+      <input id="twofaCode" type="text" maxlength="6" placeholder="6-digit code" />
+      <button class="btn" id="btn2fa">Verify</button>
+    </div>
+  </div>
+
+  <div id="dashView" class="wrap wrap-wide hidden">
+    <div class="topbar">
+      <div>
+        <h1><span>DARK</span> PANEL</h1>
+        <p class="user-badge">Logged in as <b id="dashUser"></b></p>
+      </div>
+      <button class="btn btn-sm btn-outline" id="btnLogout">Logout</button>
+    </div>
+
+    <div id="dashMsg" class="ok hidden"></div>
+    <div id="dashErr" class="err hidden"></div>
+
+    <div class="section-title">My Firebase Projects</div>
+    <div id="fbList"></div>
+    <p id="fbEmpty" class="sub hidden">Koi Firebase nahi — neeche add karo</p>
+
+    <div class="section-title">Add New Firebase</div>
+    <div class="card">
+      <label>Project Name (apni marzi se)</label>
+      <input id="fbName" type="text" placeholder="e.g. Client 1, Main Panel" />
+      <label>Firebase Database URL</label>
+      <input id="fbUrl" type="url" placeholder="https://your-project.firebaseio.com" />
+      <label>Database Secret Key</label>
+      <input id="fbSecret" type="password" placeholder="Firebase secret key (not API key)" />
+      <button class="btn" id="btnAddFb">Save & Test Connection</button>
+    </div>
+
+    <p class="note">Firebase yahan web se manage hota hai. APK mein sirf login karke devices dekho.</p>
+  </div>
+
+  <script>
+    const API = window.location.origin;
+    let token = localStorage.getItem("dp_token") || "";
+    let sessionId = "";
+
+    const $ = (id) => document.getElementById(id);
+    const show = (el, on) => el.classList.toggle("hidden", !on);
+
+    function setErr(el, msg) {
+      if (!msg) { show(el, false); return; }
+      el.textContent = msg;
+      show(el, true);
+    }
+
+    async function api(path, opts = {}) {
+      const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+      if (token) headers["Authorization"] = "Bearer " + token;
+      const res = await fetch(API + path, { ...opts, headers });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Request failed");
+      return data;
+    }
+
+    document.querySelectorAll(".tab").forEach((t) => {
+      t.onclick = () => {
+        document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+        t.classList.add("active");
+        const tab = t.dataset.tab;
+        show($("loginPanel"), tab === "login");
+        show($("registerPanel"), tab === "register");
+        setErr($("loginErr"), "");
+        setErr($("regErr"), "");
+      };
+    });
+
+    $("btnLogin").onclick = async () => {
+      setErr($("loginErr"), "");
+      const username = $("loginUser").value.trim();
+      const password = $("loginPass").value;
+      if (!username || !password) return setErr($("loginErr"), "Username aur password daalo");
+      $("btnLogin").disabled = true;
+      try {
+        const data = await api("/api/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ username, password }),
+        });
+        if (data.requires2FA) {
+          sessionId = data.sessionId;
+          show($("loginPanel"), false);
+          show($("twofaPanel"), true);
+        } else {
+          token = data.token;
+          localStorage.setItem("dp_token", token);
+          showDashboard(data.username);
+        }
+      } catch (e) {
+        setErr($("loginErr"), e.message);
+      } finally {
+        $("btnLogin").disabled = false;
+      }
+    };
+
+    $("btn2fa").onclick = async () => {
+      setErr($("twofaErr"), "");
+      const code = $("twofaCode").value.trim();
+      if (!code) return setErr($("twofaErr"), "Code daalo");
+      try {
+        const data = await api("/api/auth/verify-2fa", {
+          method: "POST",
+          body: JSON.stringify({ sessionId, code }),
+        });
+        token = data.token;
+        localStorage.setItem("dp_token", token);
+        show($("twofaPanel"), false);
+        showDashboard(data.username);
+      } catch (e) {
+        setErr($("twofaErr"), e.message);
+      }
+    };
+
+    $("btnRegister").onclick = async () => {
+      setErr($("regErr"), "");
+      show($("regOk"), false);
+      const adminKey = $("regAdminKey").value.trim();
+      const username = $("regUser").value.trim();
+      const password = $("regPass").value;
+      const pass2 = $("regPass2").value;
+      if (!adminKey) return setErr($("regErr"), "Admin Key required");
+      if (!username || !password) return setErr($("regErr"), "Username aur password daalo");
+      if (password !== pass2) return setErr($("regErr"), "Password match nahi karta");
+      $("btnRegister").disabled = true;
+      try {
+        await fetch(API + "/api/admin/accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
+          body: JSON.stringify({ username, password }),
+        }).then(async (r) => {
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || "Failed");
+          return d;
+        });
+        $("regOk").textContent = "Account ban gaya! Ab login karo.";
+        show($("regOk"), true);
+        $("regUser").value = "";
+        $("regPass").value = "";
+        $("regPass2").value = "";
+      } catch (e) {
+        setErr($("regErr"), e.message);
+      } finally {
+        $("btnRegister").disabled = false;
+      }
+    };
+
+    async function loadFirebase() {
+      setErr($("dashErr"), "");
+      try {
+        const data = await api("/api/firebase-projects");
+        const list = data.projects || [];
+        const box = $("fbList");
+        box.innerHTML = "";
+        show($("fbEmpty"), list.length === 0);
+        list.forEach((p) => {
+          const div = document.createElement("div");
+          div.className = "fb-item";
+          div.innerHTML = `
+            <div>
+              <div class="fb-name">${esc(p.name)}</div>
+              <div class="fb-url">${esc(p.firebaseUrl || "")}</div>
+            </div>
+            <div class="fb-actions">
+              <button class="btn btn-sm btn-outline" data-test="${p.id}">Test</button>
+              <button class="btn btn-sm btn-danger" data-del="${p.id}">Delete</button>
+            </div>`;
+          box.appendChild(div);
+        });
+        box.querySelectorAll("[data-test]").forEach((b) => {
+          b.onclick = async () => {
+            try {
+              await api("/api/firebase-projects/" + b.dataset.test + "/test", { method: "POST" });
+              $("dashMsg").textContent = "Connection OK!";
+              show($("dashMsg"), true);
+              setTimeout(() => show($("dashMsg"), false), 3000);
+            } catch (e) { setErr($("dashErr"), e.message); }
+          };
+        });
+        box.querySelectorAll("[data-del]").forEach((b) => {
+          b.onclick = async () => {
+            if (!confirm("Delete this Firebase?")) return;
+            try {
+              await api("/api/firebase-projects/" + b.dataset.del, { method: "DELETE" });
+              loadFirebase();
+            } catch (e) { setErr($("dashErr"), e.message); }
+          };
+        });
+      } catch (e) {
+        if (e.message.includes("Unauthorized") || e.message.includes("token")) logout();
+        else setErr($("dashErr"), e.message);
+      }
+    }
+
+    $("btnAddFb").onclick = async () => {
+      setErr($("dashErr"), "");
+      const name = $("fbName").value.trim();
+      const firebaseUrl = $("fbUrl").value.trim();
+      const firebaseSecret = $("fbSecret").value.trim();
+      if (!name || !firebaseUrl || !firebaseSecret) return setErr($("dashErr"), "Saari fields bhari karo");
+      $("btnAddFb").disabled = true;
+      try {
+        await api("/api/firebase-projects", {
+          method: "POST",
+          body: JSON.stringify({ name, firebaseUrl, firebaseSecret }),
+        });
+        $("fbName").value = "";
+        $("fbUrl").value = "";
+        $("fbSecret").value = "";
+        $("dashMsg").textContent = "Firebase added!";
+        show($("dashMsg"), true);
+        loadFirebase();
+      } catch (e) {
+        setErr($("dashErr"), e.message);
+      } finally {
+        $("btnAddFb").disabled = false;
+      }
+    };
+
+    function showDashboard(username) {
+      show($("authView"), false);
+      show($("dashView"), true);
+      $("dashUser").textContent = username;
+      loadFirebase();
+    }
+
+    function logout() {
+      token = "";
+      localStorage.removeItem("dp_token");
+      show($("dashView"), false);
+      show($("authView"), true);
+      show($("loginPanel"), true);
+      show($("registerPanel"), false);
+      show($("twofaPanel"), false);
+    }
+
+    $("btnLogout").onclick = logout;
+
+    function esc(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    if (token) {
+      api("/api/auth/me").then((d) => showDashboard(d.username)).catch(logout);
+    }
+  </script>
+</body>
+</html>
