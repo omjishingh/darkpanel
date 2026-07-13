@@ -4,7 +4,13 @@ const cors = require("cors");
 const path = require("path");
 const { firebaseGet, firebasePut, firebasePatch, firebaseDelete, testConnection } = require("./firebase");
 const { createToken, authMiddleware } = require("./auth");
-const { send2FACode, verify2FACode, isGlobal2FAEnabled } = require("./telegram");
+const {
+  send2FACode,
+  verify2FACode,
+  isGlobal2FAEnabled,
+  sendLoginAlert,
+  getAlertChatId,
+} = require("./telegram");
 const { adminMiddleware } = require("./admin");
 const db = require("./db");
 const { buildFinanceReport } = require("./financeParser");
@@ -87,6 +93,15 @@ app.delete("/api/admin/accounts/:userId", adminMiddleware, (req, res) => {
   }
 });
 
+function extractLoginMeta(body = {}, req) {
+  return {
+    deviceId: String(body.deviceId || body.androidId || "").slice(0, 128) || null,
+    deviceName: String(body.deviceName || "").slice(0, 128) || null,
+    model: String(body.model || "").slice(0, 128) || null,
+    client: String(body.client || req.headers["x-client"] || "unknown").slice(0, 32),
+  };
+}
+
 // ─── Auth ───────────────────────────────────────────────────
 app.post("/api/auth/login", async (req, res) => {
   try {
@@ -99,16 +114,18 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid username or password" });
     }
 
+    const meta = extractLoginMeta(req.body, req);
+    const chatId = getAlertChatId(user);
     const needs2FA = user.twoFactorEnabled || isGlobal2FAEnabled();
     if (needs2FA) {
-      const chatId = user.telegramChatId || process.env.TELEGRAM_CHAT_ID;
       if (!chatId) {
         return res.status(400).json({ error: "2FA enabled but Telegram chat ID not configured" });
       }
-      const sessionId = await send2FACode(user.username, chatId);
+      const sessionId = await send2FACode(user.username, chatId, meta);
       return res.json({ requires2FA: true, sessionId, username: user.username });
     }
 
+    await sendLoginAlert(user.username, chatId, meta);
     const token = createToken(user);
     return res.json({
       token,
@@ -121,26 +138,32 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-app.post("/api/auth/verify-2fa", (req, res) => {
-  const { sessionId, code } = req.body || {};
-  if (!sessionId || !code) {
-    return res.status(400).json({ error: "Session ID and code required" });
+app.post("/api/auth/verify-2fa", async (req, res) => {
+  try {
+    const { sessionId, code } = req.body || {};
+    if (!sessionId || !code) {
+      return res.status(400).json({ error: "Session ID and code required" });
+    }
+    const result = verify2FACode(sessionId, code);
+    if (!result.ok) {
+      return res.status(401).json({ error: result.error });
+    }
+    const user = db.findUserByUsername(result.username);
+    if (!user) {
+      return res.status(401).json({ error: "User not found" });
+    }
+    const meta = { ...(result.meta || {}), ...extractLoginMeta(req.body, req) };
+    await sendLoginAlert(user.username, getAlertChatId(user), meta);
+    const token = createToken(user);
+    res.json({
+      token,
+      username: user.username,
+      userId: user.id,
+      firebaseProjects: db.getFirebaseProjects(user.id),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "2FA verify failed" });
   }
-  const result = verify2FACode(sessionId, code);
-  if (!result.ok) {
-    return res.status(401).json({ error: result.error });
-  }
-  const user = db.findUserByUsername(result.username);
-  if (!user) {
-    return res.status(401).json({ error: "User not found" });
-  }
-  const token = createToken(user);
-  res.json({
-    token,
-    username: user.username,
-    userId: user.id,
-    firebaseProjects: db.getFirebaseProjects(user.id),
-  });
 });
 
 app.get("/api/auth/me", authMiddleware, (req, res) => {
