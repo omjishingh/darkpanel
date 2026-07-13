@@ -27,6 +27,20 @@ function resolveProject(req, res) {
   }
 }
 
+app.get("/", (_, res) => {
+  res.json({
+    name: "DARK PANEL API",
+    status: "running",
+    message: "API is live. Use /api/health to check status.",
+    endpoints: {
+      health: "/api/health",
+      login: "POST /api/auth/login",
+      firebaseProjects: "GET /api/firebase-projects",
+      adminCreateAccount: "POST /api/admin/accounts",
+    },
+  });
+});
+
 app.get("/api/health", (_, res) => {
   res.json({ ok: true, global2FA: isGlobal2FAEnabled() });
 });
