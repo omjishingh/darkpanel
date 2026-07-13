@@ -46,8 +46,38 @@
     if (!el) return;
     el.textContent = msg;
     el.className = isErr ? "toast err" : "toast ok";
+    el.id = "toast";
     show(el, true);
     setTimeout(() => show(el, false), 3000);
+  }
+
+  function openSidebar() {
+    $("sidebar")?.classList.add("open");
+    const bd = $("sidebarBackdrop");
+    if (bd) {
+      bd.hidden = false;
+      bd.classList.add("open");
+    }
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeSidebar() {
+    $("sidebar")?.classList.remove("open");
+    const bd = $("sidebarBackdrop");
+    if (bd) {
+      bd.classList.remove("open");
+      bd.hidden = true;
+    }
+    document.body.style.overflow = "";
+  }
+
+  function setupMobileNav() {
+    $("btnOpenSidebar")?.addEventListener("click", openSidebar);
+    $("btnCloseSidebar")?.addEventListener("click", closeSidebar);
+    $("sidebarBackdrop")?.addEventListener("click", closeSidebar);
+    window.addEventListener("resize", () => {
+      if (window.innerWidth > 980) closeSidebar();
+    });
   }
 
   async function api(path, opts = {}) {
@@ -320,8 +350,10 @@
     show("authView", false);
     show("appView", true);
     $("sidebarUser").innerHTML = "Logged in as <b>" + esc(username) + "</b>";
+    if ($("mobileUser")) $("mobileUser").textContent = username || "";
     await loadProjects();
     initNav();
+    setupMobileNav();
     if (activeProjectId && projects.find((p) => p.id === activeProjectId)) {
       switchView("overview");
       loadDevices();
@@ -343,6 +375,7 @@
           return;
         }
         switchView(v);
+        closeSidebar();
         if (v === "overview" || v === "devices") loadDevices(true);
         if (v === "favorites") renderFavorites();
         if (v === "telegram") loadTelegramBot();
