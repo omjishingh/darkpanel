@@ -43,6 +43,22 @@ async function firebasePut(firebaseUrl, firebaseSecret, path, data) {
   return res.json();
 }
 
+async function firebasePatch(firebaseUrl, firebaseSecret, path, data) {
+  const base = normalizeUrl(firebaseUrl);
+  const auth = String(firebaseSecret || "").trim();
+  const url = `${base}/${path}.json?auth=${auth}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw new Error("PERMISSION_DENIED");
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 async function firebaseDelete(firebaseUrl, firebaseSecret, path) {
   const base = normalizeUrl(firebaseUrl);
   const auth = String(firebaseSecret || "").trim();
@@ -56,4 +72,4 @@ async function testConnection(firebaseUrl, firebaseSecret) {
   return true;
 }
 
-module.exports = { firebaseGet, firebasePut, firebaseDelete, testConnection, normalizeUrl };
+module.exports = { firebaseGet, firebasePut, firebasePatch, firebaseDelete, testConnection, normalizeUrl };

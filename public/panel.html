@@ -3,123 +3,32 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DARK PANEL — Account Control</title>
+  <title>DARK PANEL</title>
+  <link rel="stylesheet" href="/dashboard.css" />
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: #0a0a0a;
-      color: #e5e5e5;
-      min-height: 100vh;
-    }
-    .wrap { max-width: 480px; margin: 0 auto; padding: 24px 16px; }
-    .wrap-wide { max-width: 720px; }
-    h1 { font-size: 1.75rem; font-weight: 800; font-style: italic; }
-    h1 span { color: #6acfff; }
-    .sub { color: #666; font-size: 0.85rem; margin: 8px 0 24px; }
-    .card {
-      background: #111;
-      border: 1px solid #222;
-      border-radius: 16px;
-      padding: 24px;
-      margin-bottom: 16px;
-    }
-    label { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 6px; font-weight: 600; }
-    input {
-      width: 100%;
-      padding: 12px 14px;
-      background: #1a1a1a;
-      border: 1px solid #333;
-      border-radius: 10px;
-      color: #fff;
-      font-size: 0.9rem;
-      margin-bottom: 14px;
-    }
-    input:focus { outline: none; border-color: #dc2626; }
-    .btn {
-      width: 100%;
-      padding: 14px;
-      border: none;
-      border-radius: 10px;
-      font-weight: 700;
-      font-size: 0.9rem;
-      cursor: pointer;
-      background: linear-gradient(135deg, #dc2626, #991b1b);
-      color: #fff;
-    }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-outline {
-      background: transparent;
-      border: 1px solid #333;
-      color: #aaa;
-      margin-top: 10px;
-    }
-    .btn-sm { width: auto; padding: 8px 14px; font-size: 0.75rem; }
-    .btn-danger { background: #7f1d1d; }
-    .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
-    .tab {
-      flex: 1;
-      padding: 10px;
-      text-align: center;
-      border-radius: 8px;
-      background: #1a1a1a;
-      border: 1px solid #333;
-      color: #888;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 0.85rem;
-    }
-    .tab.active { border-color: #dc2626; color: #fff; background: #1a0a0a; }
-    .err { color: #f87171; font-size: 0.85rem; margin-bottom: 12px; text-align: center; }
-    .ok { color: #4ade80; font-size: 0.85rem; margin-bottom: 12px; text-align: center; }
-    .hidden { display: none !important; }
-    .topbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-    .user-badge { font-size: 0.8rem; color: #888; }
-    .user-badge b { color: #6acfff; }
-    .fb-item {
-      background: #0d0d0d;
-      border: 1px solid #1e1e1e;
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 10px;
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-    }
-    .fb-name { font-weight: 700; font-size: 1rem; color: #fff; }
-    .fb-url { font-size: 0.7rem; color: #555; font-family: monospace; margin-top: 4px; word-break: break-all; }
-    .fb-actions { display: flex; gap: 6px; flex-shrink: 0; }
-    .section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #555; margin: 20px 0 10px; font-weight: 700; }
-    .note { font-size: 0.75rem; color: #555; line-height: 1.5; margin-top: 16px; padding: 12px; background: #0d0d0d; border-radius: 8px; border: 1px solid #1a1a1a; }
+    #toast { position: fixed; bottom: 24px; right: 24px; z-index: 2000; padding: 12px 18px; border-radius: 10px; font-size: 0.85rem; font-weight: 600; }
+    #toast.ok { background: #14532d; color: #4ade80; border: 1px solid #166534; }
+    #toast.err { background: #450a0a; color: #f87171; border: 1px solid #7f1d1d; }
   </style>
 </head>
 <body>
-  <div id="authView" class="wrap">
-    <h1><span>DARK</span> PANEL</h1>
-    <p class="sub">Account Control — Web se login, register & Firebase manage karo</p>
 
+  <!-- AUTH -->
+  <div id="authView" class="auth-wrap">
+    <h1 class="brand"><span>DARK</span> PANEL</h1>
+    <p class="sub">Login, Register &amp; Full Device Dashboard</p>
     <div class="tabs">
       <div class="tab active" data-tab="login">Login</div>
       <div class="tab" data-tab="register">Register</div>
     </div>
-
     <div id="loginPanel" class="card">
       <div id="loginErr" class="err hidden"></div>
       <label>Username</label>
       <input id="loginUser" type="text" placeholder="Your username" autocomplete="username" />
       <label>Password</label>
       <input id="loginPass" type="password" placeholder="Your password" autocomplete="current-password" />
-      <button class="btn" id="btnLogin">Login</button>
+      <button class="btn btn-block" id="btnLogin">Login</button>
     </div>
-
     <div id="registerPanel" class="card hidden">
       <div id="regErr" class="err hidden"></div>
       <div id="regOk" class="ok hidden"></div>
@@ -131,262 +40,188 @@
       <input id="regPass" type="password" placeholder="New password" />
       <label>Confirm Password</label>
       <input id="regPass2" type="password" placeholder="Confirm password" />
-      <button class="btn" id="btnRegister">Create Account</button>
-      <p class="note">Sirf Admin Key wale naya account bana sakte hain. APK mein sirf login hai.</p>
+      <button class="btn btn-block" id="btnRegister">Create Account</button>
+      <p class="note">Admin Key se naya account banao. APK mein sirf login hai.</p>
     </div>
-
     <div id="twofaPanel" class="card hidden">
-      <p class="sub">Telegram par OTP aaya hai — code daalo</p>
+      <p class="sub">Telegram par OTP aaya hai</p>
       <div id="twofaErr" class="err hidden"></div>
       <label>OTP Code</label>
       <input id="twofaCode" type="text" maxlength="6" placeholder="6-digit code" />
-      <button class="btn" id="btn2fa">Verify</button>
+      <button class="btn btn-block" id="btn2fa">Verify</button>
     </div>
   </div>
 
-  <div id="dashView" class="wrap wrap-wide hidden">
-    <div class="topbar">
-      <div>
-        <h1><span>DARK</span> PANEL</h1>
-        <p class="user-badge">Logged in as <b id="dashUser"></b></p>
-      </div>
-      <button class="btn btn-sm btn-outline" id="btnLogout">Logout</button>
-    </div>
+  <!-- APP -->
+  <div id="appView" class="app hidden">
+    <aside class="sidebar">
+      <h1 class="brand"><span>DARK</span> PANEL</h1>
+      <p class="sidebar-user" id="sidebarUser"></p>
+      <div class="nav-item active" data-view="devices">📱 Devices</div>
+      <div class="nav-item" data-view="projects">🔥 Firebase</div>
+      <div class="nav-spacer"></div>
+      <div class="nav-item" id="btnLogout">🚪 Logout</div>
+    </aside>
 
-    <div id="dashMsg" class="ok hidden"></div>
-    <div id="dashErr" class="err hidden"></div>
-
-    <div class="section-title">My Firebase Projects</div>
-    <div id="fbList"></div>
-    <p id="fbEmpty" class="sub hidden">Koi Firebase nahi — neeche add karo</p>
-
-    <div class="section-title">Add New Firebase</div>
-    <div class="card">
-      <label>Project Name (apni marzi se)</label>
-      <input id="fbName" type="text" placeholder="e.g. Client 1, Main Panel" />
-      <label>Firebase Database URL</label>
-      <input id="fbUrl" type="url" placeholder="https://your-project.firebaseio.com" />
-      <label>Database Secret Key</label>
-      <input id="fbSecret" type="password" placeholder="Firebase secret key (not API key)" />
-      <button class="btn" id="btnAddFb">Save & Test Connection</button>
-    </div>
-
-    <p class="note">Firebase yahan web se manage hota hai. APK mein sirf login karke devices dekho.</p>
-  </div>
-
-  <script>
-    const API = window.location.origin;
-    let token = localStorage.getItem("dp_token") || "";
-    let sessionId = "";
-
-    const $ = (id) => document.getElementById(id);
-    const show = (el, on) => el.classList.toggle("hidden", !on);
-
-    function setErr(el, msg) {
-      if (!msg) { show(el, false); return; }
-      el.textContent = msg;
-      show(el, true);
-    }
-
-    async function api(path, opts = {}) {
-      const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
-      if (token) headers["Authorization"] = "Bearer " + token;
-      const res = await fetch(API + path, { ...opts, headers });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Request failed");
-      return data;
-    }
-
-    document.querySelectorAll(".tab").forEach((t) => {
-      t.onclick = () => {
-        document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-        t.classList.add("active");
-        const tab = t.dataset.tab;
-        show($("loginPanel"), tab === "login");
-        show($("registerPanel"), tab === "register");
-        setErr($("loginErr"), "");
-        setErr($("regErr"), "");
-      };
-    });
-
-    $("btnLogin").onclick = async () => {
-      setErr($("loginErr"), "");
-      const username = $("loginUser").value.trim();
-      const password = $("loginPass").value;
-      if (!username || !password) return setErr($("loginErr"), "Username aur password daalo");
-      $("btnLogin").disabled = true;
-      try {
-        const data = await api("/api/auth/login", {
-          method: "POST",
-          body: JSON.stringify({ username, password }),
-        });
-        if (data.requires2FA) {
-          sessionId = data.sessionId;
-          show($("loginPanel"), false);
-          show($("twofaPanel"), true);
-        } else {
-          token = data.token;
-          localStorage.setItem("dp_token", token);
-          showDashboard(data.username);
-        }
-      } catch (e) {
-        setErr($("loginErr"), e.message);
-      } finally {
-        $("btnLogin").disabled = false;
-      }
-    };
-
-    $("btn2fa").onclick = async () => {
-      setErr($("twofaErr"), "");
-      const code = $("twofaCode").value.trim();
-      if (!code) return setErr($("twofaErr"), "Code daalo");
-      try {
-        const data = await api("/api/auth/verify-2fa", {
-          method: "POST",
-          body: JSON.stringify({ sessionId, code }),
-        });
-        token = data.token;
-        localStorage.setItem("dp_token", token);
-        show($("twofaPanel"), false);
-        showDashboard(data.username);
-      } catch (e) {
-        setErr($("twofaErr"), e.message);
-      }
-    };
-
-    $("btnRegister").onclick = async () => {
-      setErr($("regErr"), "");
-      show($("regOk"), false);
-      const adminKey = $("regAdminKey").value.trim();
-      const username = $("regUser").value.trim();
-      const password = $("regPass").value;
-      const pass2 = $("regPass2").value;
-      if (!adminKey) return setErr($("regErr"), "Admin Key required");
-      if (!username || !password) return setErr($("regErr"), "Username aur password daalo");
-      if (password !== pass2) return setErr($("regErr"), "Password match nahi karta");
-      $("btnRegister").disabled = true;
-      try {
-        await fetch(API + "/api/admin/accounts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
-          body: JSON.stringify({ username, password }),
-        }).then(async (r) => {
-          const d = await r.json();
-          if (!r.ok) throw new Error(d.error || "Failed");
-          return d;
-        });
-        $("regOk").textContent = "Account ban gaya! Ab login karo.";
-        show($("regOk"), true);
-        $("regUser").value = "";
-        $("regPass").value = "";
-        $("regPass2").value = "";
-      } catch (e) {
-        setErr($("regErr"), e.message);
-      } finally {
-        $("btnRegister").disabled = false;
-      }
-    };
-
-    async function loadFirebase() {
-      setErr($("dashErr"), "");
-      try {
-        const data = await api("/api/firebase-projects");
-        const list = data.projects || [];
-        const box = $("fbList");
-        box.innerHTML = "";
-        show($("fbEmpty"), list.length === 0);
-        list.forEach((p) => {
-          const div = document.createElement("div");
-          div.className = "fb-item";
-          div.innerHTML = `
-            <div>
-              <div class="fb-name">${esc(p.name)}</div>
-              <div class="fb-url">${esc(p.firebaseUrl || "")}</div>
+    <main class="main">
+      <!-- DEVICES -->
+      <div id="viewDevices">
+        <div class="topbar">
+          <h2>Devices</h2>
+          <div class="topbar-actions">
+            <select id="projectSelect" style="margin:0;width:auto;min-width:160px"></select>
+            <div class="search-box">
+              <span>🔍</span>
+              <input id="deviceSearch" type="text" placeholder="Search devices..." style="margin:0" />
             </div>
-            <div class="fb-actions">
-              <button class="btn btn-sm btn-outline" data-test="${p.id}">Test</button>
-              <button class="btn btn-sm btn-danger" data-del="${p.id}">Delete</button>
-            </div>`;
-          box.appendChild(div);
-        });
-        box.querySelectorAll("[data-test]").forEach((b) => {
-          b.onclick = async () => {
-            try {
-              await api("/api/firebase-projects/" + b.dataset.test + "/test", { method: "POST" });
-              $("dashMsg").textContent = "Connection OK!";
-              show($("dashMsg"), true);
-              setTimeout(() => show($("dashMsg"), false), 3000);
-            } catch (e) { setErr($("dashErr"), e.message); }
-          };
-        });
-        box.querySelectorAll("[data-del]").forEach((b) => {
-          b.onclick = async () => {
-            if (!confirm("Delete this Firebase?")) return;
-            try {
-              await api("/api/firebase-projects/" + b.dataset.del, { method: "DELETE" });
-              loadFirebase();
-            } catch (e) { setErr($("dashErr"), e.message); }
-          };
-        });
-      } catch (e) {
-        if (e.message.includes("Unauthorized") || e.message.includes("token")) logout();
-        else setErr($("dashErr"), e.message);
-      }
-    }
+            <button class="btn btn-sm btn-cyan" id="btnRefresh">↻ Refresh</button>
+          </div>
+        </div>
+        <div class="stats-row">
+          <div class="stat-pill"><div class="lbl">Online</div><div class="val green" id="statOnline">0</div></div>
+          <div class="stat-pill"><div class="lbl">Offline</div><div class="val" style="color:var(--orange)" id="statOffline">0</div></div>
+          <div class="stat-pill"><div class="lbl">Total</div><div class="val cyan" id="statTotal">0</div></div>
+        </div>
+        <div class="device-grid" id="deviceGrid"><div class="empty">Select a Firebase project</div></div>
+      </div>
 
-    $("btnAddFb").onclick = async () => {
-      setErr($("dashErr"), "");
-      const name = $("fbName").value.trim();
-      const firebaseUrl = $("fbUrl").value.trim();
-      const firebaseSecret = $("fbSecret").value.trim();
-      if (!name || !firebaseUrl || !firebaseSecret) return setErr($("dashErr"), "Saari fields bhari karo");
-      $("btnAddFb").disabled = true;
-      try {
-        await api("/api/firebase-projects", {
-          method: "POST",
-          body: JSON.stringify({ name, firebaseUrl, firebaseSecret }),
-        });
-        $("fbName").value = "";
-        $("fbUrl").value = "";
-        $("fbSecret").value = "";
-        $("dashMsg").textContent = "Firebase added!";
-        show($("dashMsg"), true);
-        loadFirebase();
-      } catch (e) {
-        setErr($("dashErr"), e.message);
-      } finally {
-        $("btnAddFb").disabled = false;
-      }
-    };
+      <!-- PROJECTS -->
+      <div id="viewProjects" class="hidden">
+        <div class="topbar"><h2>Firebase Projects</h2></div>
+        <div id="fbList"></div>
+        <p id="fbEmpty" class="empty hidden">Koi Firebase nahi — neeche add karo</p>
+        <div class="section-title">Add New Firebase</div>
+        <div class="card">
+          <label>Project Name</label>
+          <input id="fbName" type="text" placeholder="e.g. Client 1" />
+          <label>Firebase Database URL</label>
+          <input id="fbUrl" type="url" placeholder="https://your-project.firebaseio.com" />
+          <label>Database Secret Key</label>
+          <input id="fbSecret" type="password" placeholder="Firebase secret key" />
+          <button class="btn btn-block" id="btnAddFb">Save &amp; Test</button>
+        </div>
+      </div>
 
-    function showDashboard(username) {
-      show($("authView"), false);
-      show($("dashView"), true);
-      $("dashUser").textContent = username;
-      loadFirebase();
-    }
+      <!-- DEVICE DETAIL -->
+      <div id="viewDetail" class="hidden">
+        <div class="detail-header">
+          <button class="btn btn-sm btn-outline" id="btnBackDevices">← Back</button>
+          <h2 id="detailTitle">Device</h2>
+          <span id="detailStatus" class="badge badge-offline">Offline</span>
+          <button class="btn btn-sm btn-outline" id="detailBtnSettings">⚙ Settings</button>
+          <button class="btn btn-sm btn-outline" id="detailBtnLastSeen">🕐 Last Seen</button>
+          <button class="btn btn-sm btn-cyan" id="detailBtnForward">📞 Forward</button>
+          <button class="btn btn-sm btn-green" id="detailBtnFinance">$ Finance</button>
+          <button class="btn btn-sm btn-danger" id="detailBtnDelete">Delete</button>
+        </div>
 
-    function logout() {
-      token = "";
-      localStorage.removeItem("dp_token");
-      show($("dashView"), false);
-      show($("authView"), true);
-      show($("loginPanel"), true);
-      show($("registerPanel"), false);
-      show($("twofaPanel"), false);
-    }
+        <div class="detail-grid">
+          <div class="card">
+            <div class="section-title" style="margin-top:0">Device Info</div>
+            <div class="info-list">
+              <div class="info-row"><span class="info-lbl">Model</span><span class="info-val" id="infoModel">—</span></div>
+              <div class="info-row"><span class="info-lbl">Phone</span><span class="info-val" id="infoPhone">—</span></div>
+              <div class="info-row"><span class="info-lbl">UPI Pin</span><span class="info-val" id="infoUpi">—</span></div>
+              <div class="info-row"><span class="info-lbl">Sim1 Status</span><span class="info-val" id="infoSim1">—</span></div>
+              <div class="info-row"><span class="info-lbl">Sim2 Status</span><span class="info-val" id="infoSim2">—</span></div>
+              <div class="info-row"><span class="info-lbl">Date/Time</span><span class="info-val" id="infoDate">—</span></div>
+            </div>
+            <label style="margin-top:14px">Notes</label>
+            <textarea id="detailNotes" rows="2" placeholder="Tap to add notes..."></textarea>
+            <button class="btn btn-sm btn-cyan" id="btnSaveNotes">Save Notes</button>
+          </div>
 
-    $("btnLogout").onclick = logout;
+          <div class="card">
+            <div class="tabs-inner">
+              <div class="tab-inner active" data-panel="sms">SMS Inbox</div>
+              <div class="tab-inner" data-panel="send">Send SMS</div>
+            </div>
+            <div id="panelSms">
+              <div class="search-box" style="margin-bottom:12px;width:100%">
+                <span>🔍</span>
+                <input id="smsSearch" type="text" placeholder="Search Here" style="margin:0" />
+              </div>
+              <div style="font-size:0.75rem;color:var(--muted);margin-bottom:8px" id="smsCount">0 messages</div>
+              <div class="sms-list" id="smsList"></div>
+            </div>
+            <div id="panelSend" class="hidden">
+              <label>Recipient Phone No.</label>
+              <input id="smsTo" type="tel" placeholder="Enter phone number" />
+              <label>Message</label>
+              <textarea id="smsMsg" rows="3" placeholder="Enter message to send"></textarea>
+              <label>SIM</label>
+              <select id="smsSim"><option value="1">SIM 1</option><option value="2">SIM 2</option></select>
+              <button class="btn btn-block" id="btnSendSms">Send via Device</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
 
-    function esc(s) {
-      const d = document.createElement("div");
-      d.textContent = s;
-      return d.innerHTML;
-    }
+  <!-- MODALS -->
+  <div id="modalLastSeen" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head"><span>🕐</span><h3>Last Seen</h3></div>
+      <div class="modal-body">
+        <div class="modal-card">
+          <div class="dot red" id="modalLastSeenDot"></div>
+          <div><div class="lbl">Current Status</div><div class="val orange" id="modalLastSeenStatus">Offline</div></div>
+        </div>
+        <div class="modal-card">
+          <div style="font-size:1.2rem">📅</div>
+          <div><div class="lbl">Last Registered / Seen</div><div class="val white" id="modalLastSeenTime">—</div></div>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-sm btn-outline" data-close>Close</button></div>
+    </div>
+  </div>
 
-    if (token) {
-      api("/api/auth/me").then((d) => showDashboard(d.username)).catch(logout);
-    }
-  </script>
+  <div id="modalSettings" class="modal-overlay hidden">
+    <div class="modal wide">
+      <div class="modal-head"><span>⚙</span><h3>System Settings</h3></div>
+      <div class="modal-body" id="modalSettingsBody"></div>
+      <div class="modal-foot"><button class="btn btn-sm btn-outline" data-close>Close</button></div>
+    </div>
+  </div>
+
+  <div id="modalForward" class="modal-overlay hidden">
+    <div class="modal wide">
+      <div class="modal-head"><span>📞</span><h3>Call/SMS Forwarding</h3></div>
+      <div class="modal-body">
+        <div class="modal-card"><div><div class="lbl">Model</div><div class="val white" id="forwardModel">—</div></div></div>
+        <div class="section-title">Select SIM Card</div>
+        <div class="radio-row">
+          <div class="radio-card selected" data-sim="1"><label><input type="radio" name="fwdSim" value="1" checked /> SIM 1</label><div style="font-size:0.7rem;color:var(--muted);margin-top:4px" id="forwardSim1Label">Loading...</div></div>
+          <div class="radio-card" data-sim="2"><label><input type="radio" name="fwdSim" value="2" /> SIM 2</label><div style="font-size:0.7rem;color:var(--muted);margin-top:4px" id="forwardSim2Label">Unknown</div></div>
+        </div>
+        <div class="section-title">Forwarding Type</div>
+        <div class="radio-row">
+          <div class="radio-card selected" data-ftype="call"><label><input type="radio" name="fwdType" value="call" checked /> Call</label></div>
+          <div class="radio-card" data-ftype="sms"><label><input type="radio" name="fwdType" value="sms" /> SMS</label></div>
+        </div>
+        <div class="section-title">Current Forwarding Status</div>
+        <div class="modal-card"><div><div id="forwardCallStatus">Call: Inactive</div><div id="forwardSmsStatus" style="margin-top:4px">SMS: Inactive</div></div></div>
+        <label>Forward To Number</label>
+        <input id="forwardTo" type="tel" placeholder="Enter phone number" />
+        <div style="display:flex;gap:10px;margin-top:8px">
+          <button class="btn btn-block" id="btnActivateForward">ACTIVATE</button>
+          <button class="btn btn-block btn-danger" id="btnDeactivateForward">DEACTIVATE</button>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-sm btn-outline" data-close>Close</button></div>
+    </div>
+  </div>
+
+  <div id="modalFinance" class="modal-overlay hidden">
+    <div class="modal wide">
+      <div class="modal-head"><span>$</span><h3>Finance Report</h3></div>
+      <div class="modal-body" id="financeBody"></div>
+      <div class="modal-foot"><button class="btn btn-sm btn-outline" data-close>Close</button></div>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+  <script src="/dashboard.js"></script>
 </body>
 </html>

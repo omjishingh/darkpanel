@@ -111,7 +111,14 @@ function sanitizeUser(user) {
   };
 }
 
-function sanitizeFirebaseProject(project) {
+function sanitizeFirebaseProjectForApp(project) {
+  return {
+    id: project.id,
+    name: project.name,
+  };
+}
+
+function sanitizeFirebaseProjectForWeb(project) {
   return {
     id: project.id,
     name: project.name,
@@ -122,10 +129,13 @@ function sanitizeFirebaseProject(project) {
   };
 }
 
-function getFirebaseProjects(userId) {
+function getFirebaseProjects(userId, includeSensitive = false) {
   const user = findUserById(userId);
   if (!user) throw new Error("User not found");
-  return (user.firebaseProjects || []).map(sanitizeFirebaseProject);
+  const sanitize = includeSensitive
+    ? sanitizeFirebaseProjectForWeb
+    : sanitizeFirebaseProjectForApp;
+  return (user.firebaseProjects || []).map(sanitize);
 }
 
 function getFirebaseProject(userId, projectId) {
@@ -136,7 +146,7 @@ function getFirebaseProject(userId, projectId) {
   return project;
 }
 
-function addFirebaseProject(userId, { name, firebaseUrl, firebaseSecret }) {
+function addFirebaseProject(userId, { name, firebaseUrl, firebaseSecret }, includeSensitive = false) {
   const db = readDb();
   const user = db.users[userId];
   if (!user) throw new Error("User not found");
@@ -165,10 +175,12 @@ function addFirebaseProject(userId, { name, firebaseUrl, firebaseSecret }) {
   user.firebaseProjects = user.firebaseProjects || [];
   user.firebaseProjects.push(project);
   writeDb(db);
-  return sanitizeFirebaseProject(project);
+  return includeSensitive
+    ? sanitizeFirebaseProjectForWeb(project)
+    : sanitizeFirebaseProjectForApp(project);
 }
 
-function updateFirebaseProject(userId, projectId, updates) {
+function updateFirebaseProject(userId, projectId, updates, includeSensitive = false) {
   const db = readDb();
   const user = db.users[userId];
   if (!user) throw new Error("User not found");
@@ -196,7 +208,9 @@ function updateFirebaseProject(userId, projectId, updates) {
   }
   project.updatedAt = new Date().toISOString();
   writeDb(db);
-  return sanitizeFirebaseProject(project);
+  return includeSensitive
+    ? sanitizeFirebaseProjectForWeb(project)
+    : sanitizeFirebaseProjectForApp(project);
 }
 
 function deleteFirebaseProject(userId, projectId) {
