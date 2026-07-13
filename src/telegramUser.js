@@ -233,6 +233,62 @@ function setGroupAutoSend(userId, chatId, autoSend) {
   return g;
 }
 
+function clearDeviceAutoSend(userId, deviceId) {
+  const bot = db.getTelegramBot(userId);
+  if (!bot) throw new Error("Bot not connected");
+  let cleared = 0;
+  for (const g of bot.groups || []) {
+    if (g.autoSend && String(g.autoSend.deviceId) === String(deviceId)) {
+      g.autoSend = null;
+      cleared += 1;
+    }
+  }
+  db.setTelegramBot(userId, bot);
+  return { ok: true, cleared };
+}
+
+function findDeviceAutoSend(userId, deviceId) {
+  const bot = db.getTelegramBot(userId);
+  if (!bot) return null;
+  const g = (bot.groups || []).find(
+    (x) => x.autoSend && String(x.autoSend.deviceId) === String(deviceId)
+  );
+  if (!g) return null;
+  return {
+    chatId: String(g.chatId),
+    title: g.title || String(g.chatId),
+    type: g.type || "group",
+    autoSend: g.autoSend,
+  };
+}
+
+async function refreshGroupTitles(userId) {
+  const bot = db.getTelegramBot(userId);
+  if (!bot?.token) throw new Error("Bot not connected");
+  const groups = bot.groups || [];
+  let updated = 0;
+  for (const g of groups) {
+    try {
+      const chat = await tgApi(bot.token, "getChat", { chat_id: g.chatId });
+      const title = chat.title || chat.username || g.title || String(g.chatId);
+      const type = chat.type || g.type || "group";
+      if (title !== g.title || type !== g.type) {
+        g.title = title;
+        g.type = type;
+        updated += 1;
+      }
+    } catch (_) {
+      /* chat may be gone */
+    }
+  }
+  db.setTelegramBot(userId, bot);
+  return {
+    ok: true,
+    updated,
+    groups: sanitizeBot(db.findUserById(userId)).groups,
+  };
+}
+
 async function queueDeviceSms(userId, projectId, deviceId, to, message, from = 1) {
   const project = db.getFirebaseProject(userId, projectId);
   await firebasePut(
@@ -311,6 +367,16 @@ async function handleWebhook(userId, secret, update, headerSecret) {
 
   const msg = update.message || update.channel_post;
   const text = msg?.text || msg?.caption || "";
+
+  // Auto-register any group/channel the bot can see (name + id)
+  if (chat && ["group", "supergroup", "channel"].includes(chat.type)) {
+    upsertGroup(userId, {
+      chatId: chat.id,
+      title: chat.title || chat.username || String(chat.id),
+      type: chat.type,
+    });
+  }
+
   if (!text) return { ok: true };
 
   // /id helper
@@ -383,6 +449,9 @@ module.exports = {
   upsertGroup,
   deleteGroup,
   setGroupAutoSend,
+  clearDeviceAutoSend,
+  findDeviceAutoSend,
+  refreshGroupTitles,
   queueDeviceSms,
   postInterceptToGroup,
   handleWebhook,

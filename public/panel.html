@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DARK PANEL</title>
-  <link rel="stylesheet" href="/dashboard.css?v=mobile3" />
+  <link rel="stylesheet" href="/dashboard.css?v=autoUi3" />
   <style>
     #toast { position: fixed; bottom: 20px; left: 16px; right: 16px; z-index: 2000; padding: 12px 18px; border-radius: 12px; font-size: 0.85rem; font-weight: 600; box-shadow: 0 8px 24px rgba(58,53,65,.15); max-width: 420px; margin: 0 auto; text-align: center; }
     #toast.ok { background: #e8f8df; color: #56ca00; border: 1px solid #c8ebad; }
@@ -238,19 +238,28 @@
         </div>
         <div class="section-title">Groups / Channels</div>
         <div class="card">
-          <p class="note" style="margin-top:0">Bot add karo group me — ID auto save. Manual bhi add kar sakte ho (/id command bhi chalega).</p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <div style="flex:1;min-width:140px">
-              <label>Chat / Channel ID</label>
-              <input id="tgManualChatId" type="text" placeholder="-100xxxxxxxxxx" />
-            </div>
-            <div style="flex:1;min-width:140px">
-              <label>Title (optional)</label>
-              <input id="tgManualTitle" type="text" placeholder="My Group" />
-            </div>
-            <button class="btn btn-sm" id="btnTgAddGroup">Add</button>
+          <p class="note" style="margin-top:0">
+            Bot ko kisi bhi group/channel me <b>Add</b> karo — name + ID <b>auto</b> panel me aa jayega (webhook). Manual ID ki zaroorat nahi.
+            Group me kuch bhi msg / <code>/id</code> bhejne se bhi list update hoti hai.
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+            <button class="btn btn-sm" id="btnTgRefreshGroups">↻ Refresh names from Telegram</button>
           </div>
-          <div id="tgGroupList" style="margin-top:14px"><div class="empty">No groups yet</div></div>
+          <div id="tgGroupList"><div class="empty">No groups yet — bot add karo group me</div></div>
+          <details style="margin-top:14px">
+            <summary style="cursor:pointer;color:var(--muted);font-size:0.8rem;font-weight:600">Advanced: manual Chat ID (optional)</summary>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+              <div style="flex:1;min-width:140px">
+                <label>Chat / Channel ID</label>
+                <input id="tgManualChatId" type="text" placeholder="-100xxxxxxxxxx" />
+              </div>
+              <div style="flex:1;min-width:140px">
+                <label>Title (optional)</label>
+                <input id="tgManualTitle" type="text" placeholder="My Group" />
+              </div>
+              <button class="btn btn-sm" id="btnTgAddGroup">Add</button>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -314,8 +323,11 @@
               <label>SIM</label>
               <select id="smsSim"><option value="1">SIM 1</option><option value="2">SIM 2</option></select>
               <button class="btn btn-block" id="btnSendSms">Send via Device</button>
-              <button class="btn btn-block btn-cyan" id="btnSendAuto" style="margin-top:8px">Send Auto (TG Group)</button>
-              <p class="note">Send Auto: group choose karo — us group me SMS Intercepted format aate hi number+msg ise device se turant send.</p>
+              <button class="btn btn-block btn-cyan" id="btnSendAuto" style="margin-top:8px">Send Auto — Choose Group</button>
+              <div id="sendAutoStatus" class="note" style="margin-top:10px">
+                Send Auto: <b>OFF</b>
+              </div>
+              <button class="btn btn-block btn-danger hidden" id="btnSendAutoOff" style="margin-top:8px">Turn OFF Send Auto</button>
             </div>
           </div>
         </div>
@@ -388,8 +400,21 @@
     </div>
   </div>
 
+  <div id="modalSendAuto" class="modal-overlay hidden">
+    <div class="modal wide">
+      <div class="modal-head"><span>⚡</span><h3>Send Auto — pick group</h3></div>
+      <div class="modal-body">
+        <p class="note" style="margin-top:0">
+          Group choose karo. Usme SMS Intercepted format aate hi number + message is device se turant send hoga.
+        </p>
+        <div id="sendAutoGroupList"><div class="empty">Loading...</div></div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-sm btn-outline" data-close>Close</button></div>
+    </div>
+  </div>
+
   <div id="toast" class="hidden"></div>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <script src="/dashboard.js?v=mobile2"></script>
+  <script src="/dashboard.js?v=autoUi3"></script>
 </body>
 </html>

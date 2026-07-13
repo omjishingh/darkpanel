@@ -512,9 +512,23 @@ app.get("/api/telegram/groups", authMiddleware, (req, res) => {
   try {
     const user = db.findUserById(req.user.sub);
     if (!user) return res.status(404).json({ error: "User not found" });
-    res.json({ groups: telegramUser.sanitizeBot(user).groups });
+    const groups = telegramUser.sanitizeBot(user).groups;
+    const deviceId = req.query.deviceId;
+    const binding = deviceId
+      ? telegramUser.findDeviceAutoSend(req.user.sub, deviceId)
+      : null;
+    res.json({ groups, binding });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/groups/refresh", authMiddleware, async (req, res) => {
+  try {
+    const result = await telegramUser.refreshGroupTitles(req.user.sub);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -545,6 +559,8 @@ app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) =>
       return res.status(400).json({ error: "projectId and deviceId required" });
     }
     db.getFirebaseProject(req.user.sub, projectId);
+    // one device → one group (clear previous binds for this device)
+    telegramUser.clearDeviceAutoSend(req.user.sub, deviceId);
     const g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, {
       projectId,
       deviceId,
@@ -560,6 +576,17 @@ app.delete("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) 
   try {
     const g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, null);
     res.json({ ok: true, group: g });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/telegram/auto-send", authMiddleware, (req, res) => {
+  try {
+    const deviceId = req.query.deviceId || req.body?.deviceId;
+    if (!deviceId) return res.status(400).json({ error: "deviceId required" });
+    const result = telegramUser.clearDeviceAutoSend(req.user.sub, deviceId);
+    res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
