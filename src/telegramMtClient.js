@@ -177,17 +177,25 @@ function attachMessageHandler(userId, client) {
       const group = (data?.groups || []).find((g) => String(g.chatId) === String(chatId));
       if (!group?.autoSend?.projectId || !group?.autoSend?.deviceId) return;
 
-      await queueDeviceSms(
+      const started = Date.now();
+      const queued = await queueDeviceSms(
         userId,
         group.autoSend.projectId,
         group.autoSend.deviceId,
         parsed.to,
         parsed.message,
-        1
+        1,
+        {
+          deviceName: group.autoSend.deviceName,
+          groupTitle: group.title,
+          chatId,
+          source: "user",
+        }
       );
+      const ms = queued?.ms ?? Date.now() - started;
       try {
         await client.sendMessage(chatId, {
-          message: `⚡ Auto SMS queued\nTo: ${parsed.to}`,
+          message: `⚡ Token/SMS queued in ${ms}ms\nDevice: ${group.autoSend.deviceName || group.autoSend.deviceId}\nGroup: ${group.title || chatId}\nTo: ${parsed.to}`,
         });
       } catch (_) {}
     } catch (err) {

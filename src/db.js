@@ -3,9 +3,16 @@ const path = require("path");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
-const DB_PATH = process.env.DATA_PATH
-  ? path.resolve(process.env.DATA_PATH)
-  : path.join(__dirname, "..", "data", "accounts.json");
+function resolveDbPath() {
+  if (process.env.DATA_PATH) return path.resolve(process.env.DATA_PATH);
+  // Prefer Render persistent disk mount if present
+  if (fs.existsSync("/var/data")) {
+    return path.join("/var/data", "accounts.json");
+  }
+  return path.join(__dirname, "..", "data", "accounts.json");
+}
+
+const DB_PATH = resolveDbPath();
 
 function ensureDb() {
   const dir = path.dirname(DB_PATH);
@@ -22,7 +29,48 @@ function readDb() {
 
 function writeDb(data) {
   ensureDb();
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+  const tmp = DB_PATH + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, DB_PATH);
+  // Optional second copy (local download / secondary mount)
+  if (process.env.DATA_BACKUP_PATH) {
+    try {
+      const bp = path.resolve(process.env.DATA_BACKUP_PATH);
+      fs.mkdirSync(path.dirname(bp), { recursive: true });
+      fs.writeFileSync(bp, JSON.stringify(data, null, 2));
+    } catch (e) {
+      console.warn("[db] backup write failed:", e.message);
+    }
+  }
+}
+
+function getDbInfo() {
+  ensureDb();
+  const data = readDb();
+  const users = Object.keys(data.users || {}).length;
+  const onEphemeral =
+    DB_PATH.includes("/opt/render/project") || DB_PATH.includes(`${path.sep}src${path.sep}data`);
+  return {
+    path: DB_PATH,
+    users,
+    onEphemeral,
+    warning: onEphemeral
+      ? "DATA_PATH project folder me hai — Render deploy pe wipe ho sakta hai. /var/data + Disk use karo."
+      : null,
+  };
+}
+
+function exportDb() {
+  ensureDb();
+  return readDb();
+}
+
+function importDb(payload) {
+  if (!payload || typeof payload !== "object" || !payload.users) {
+    throw new Error("Invalid backup — users object required");
+  }
+  writeDb({ users: payload.users });
+  return getDbInfo();
 }
 
 function generateId(prefix) {
@@ -128,6 +176,35 @@ function clearTelegramUserClient(userId) {
   if (!user) throw new Error("User not found");
   delete user.telegramUserClient;
   writeDb(db);
+}
+
+function pushAutoSendEvent(userId, event) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) return null;
+  const row = {
+    id: generateId("ase"),
+    at: new Date().toISOString(),
+    ms: Number(event.ms) || 0,
+    deviceId: String(event.deviceId || ""),
+    deviceName: String(event.deviceName || event.deviceId || ""),
+    groupTitle: String(event.groupTitle || event.chatId || ""),
+    chatId: String(event.chatId || ""),
+    to: String(event.to || ""),
+    preview: String(event.preview || "").slice(0, 80),
+    source: String(event.source || "bot"),
+  };
+  user.autoSendEvents = [row, ...(user.autoSendEvents || [])].slice(0, 40);
+  writeDb(db);
+  return row;
+}
+
+function listAutoSendEvents(userId, deviceId = null, limit = 20) {
+  const user = findUserById(userId);
+  if (!user) return [];
+  let list = user.autoSendEvents || [];
+  if (deviceId) list = list.filter((e) => String(e.deviceId) === String(deviceId));
+  return list.slice(0, limit);
 }
 
 function deleteUser(userId) {
@@ -296,4 +373,10 @@ module.exports = {
   getTelegramUserClient,
   setTelegramUserClient,
   clearTelegramUserClient,
+  pushAutoSendEvent,
+  listAutoSendEvents,
+  getDbInfo,
+  exportDb,
+  importDb,
+  DB_PATH,
 };

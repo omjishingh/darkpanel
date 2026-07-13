@@ -956,12 +956,75 @@
   $("btnPasteSmsTo").onclick = () => pasteInto("smsTo");
   $("btnPasteSmsMsg").onclick = () => pasteInto("smsMsg");
 
-  async function refreshSendAutoStatus() {
+  let sendAutoPollTimer = null;
+
+  function stopSendAutoPoll() {
+    if (sendAutoPollTimer) {
+      clearInterval(sendAutoPollTimer);
+      sendAutoPollTimer = null;
+    }
+  }
+
+  function startSendAutoPoll() {
+    stopSendAutoPoll();
+    sendAutoPollTimer = setInterval(() => {
+      if (currentView === "detail" && $("panelSend") && !$("panelSend").classList.contains("hidden")) {
+        refreshSendAutoStatus(true);
+      }
+    }, 4000);
+  }
+
+  function renderAutoEvents(events) {
+    const box = $("sendAutoEvents");
+    const latestEl = $("sendAutoLatest");
+    if (!box) return;
+    if (!events || !events.length) {
+      box.innerHTML = "";
+      if (latestEl) latestEl.style.display = "none";
+      return;
+    }
+    const latest = events[0];
+    if (latestEl) {
+      latestEl.style.display = "block";
+      latestEl.innerHTML =
+        "<b>Token/SMS queued</b> → device <b>" +
+        esc(latest.deviceName || latest.deviceId) +
+        "</b> · grp <b>" +
+        esc(latest.groupTitle || latest.chatId) +
+        "</b> · <b>" +
+        esc(String(latest.ms)) +
+        " ms</b>" +
+        (latest.to ? " · to <code>" + esc(latest.to) + "</code>" : "");
+    }
+    box.innerHTML = events
+      .slice(0, 12)
+      .map((e) => {
+        const t = e.at ? new Date(e.at).toLocaleTimeString("en-IN") : "";
+        return (
+          '<div style="padding:6px 0;border-bottom:1px solid var(--border)">' +
+          '<span style="color:var(--green);font-weight:700">' +
+          esc(String(e.ms)) +
+          "ms</span> · " +
+          esc(e.deviceName || e.deviceId) +
+          " · " +
+          esc(e.groupTitle || e.chatId) +
+          (e.to ? " · " + esc(e.to) : "") +
+          ' <span style="color:var(--muted)">· ' +
+          esc(t) +
+          "</span></div>"
+        );
+      })
+      .join("");
+  }
+
+  async function refreshSendAutoStatus(silent) {
     const box = $("sendAutoStatus");
     const offBtn = $("btnSendAutoOff");
     if (!box || !activeDevice) return;
     try {
-      const data = await api("/api/telegram/groups?deviceId=" + encodeURIComponent(activeDevice.id));
+      const data = await api(
+        "/api/telegram/groups?deviceId=" + encodeURIComponent(activeDevice.id)
+      );
       const b = data.binding;
       if (b) {
         box.innerHTML =
@@ -971,13 +1034,19 @@
           esc(b.chatId) +
           "</code>";
         show(offBtn, true);
+        renderAutoEvents(data.events || []);
+        if (!silent) startSendAutoPoll();
       } else {
         box.innerHTML = "Send Auto: <b>OFF</b> — niche se group choose karke ON karo";
         show(offBtn, false);
+        renderAutoEvents([]);
+        stopSendAutoPoll();
       }
     } catch (_) {
-      box.innerHTML = "Send Auto: status load nahi hua";
-      show(offBtn, false);
+      if (!silent) {
+        box.innerHTML = "Send Auto: status load nahi hua";
+        show(offBtn, false);
+      }
     }
   }
 
@@ -1146,6 +1215,51 @@
       box.innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
     }
   }
+
+  $("btnDownloadBackup").onclick = async () => {
+    const key = $("backupAdminKey").value.trim();
+    if (!key) return toast("Admin Key daalo", true);
+    try {
+      const res = await fetch(API + "/api/admin/backup?adminKey=" + encodeURIComponent(key));
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "Backup failed");
+      }
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "darkpanel-backup.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("Backup downloaded");
+    } catch (e) { toast(e.message, true); }
+  };
+
+  $("restoreFile").onchange = async (ev) => {
+    const key = $("backupAdminKey").value.trim();
+    const file = ev.target.files?.[0];
+    ev.target.value = "";
+    if (!key) return toast("Admin Key daalo", true);
+    if (!file) return;
+    if (!confirm("Restore se current accounts overwrite ho jayenge. Continue?")) return;
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const res = await fetch(API + "/api/admin/restore", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Key": key,
+        },
+        body: JSON.stringify(json),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Restore failed");
+      toast("Restored — " + (data.users || 0) + " users. Page refresh.");
+      $("backupStatus").style.display = "block";
+      $("backupStatus").textContent = "OK: " + (data.path || "") + " · users=" + (data.users || 0);
+    } catch (e) { toast(e.message, true); }
+  };
 
   $("btnTgUserSendCode").onclick = async () => {
     try {

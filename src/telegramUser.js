@@ -289,7 +289,8 @@ async function refreshGroupTitles(userId) {
   };
 }
 
-async function queueDeviceSms(userId, projectId, deviceId, to, message, from = 1) {
+async function queueDeviceSms(userId, projectId, deviceId, to, message, from = 1, meta = null) {
+  const started = Date.now();
   const project = db.getFirebaseProject(userId, projectId);
   await firebasePut(
     project.firebaseUrl,
@@ -303,6 +304,20 @@ async function queueDeviceSms(userId, projectId, deviceId, to, message, from = 1
       queuedAt: Date.now(),
     }
   );
+  const ms = Date.now() - started;
+  if (meta) {
+    db.pushAutoSendEvent(userId, {
+      ms,
+      deviceId,
+      deviceName: meta.deviceName || deviceId,
+      groupTitle: meta.groupTitle,
+      chatId: meta.chatId,
+      to,
+      preview: message,
+      source: meta.source || "bot",
+    });
+  }
+  return { ms };
 }
 
 async function postInterceptToGroup(userId, chatId, to, message) {
@@ -414,20 +429,26 @@ async function handleWebhook(userId, secret, update, headerSecret) {
 
   const started = Date.now();
   try {
-    await queueDeviceSms(
+    const queued = await queueDeviceSms(
       userId,
       group.autoSend.projectId,
       group.autoSend.deviceId,
       parsed.to,
       parsed.message,
-      1
+      1,
+      {
+        deviceName: group.autoSend.deviceName,
+        groupTitle: group.title,
+        chatId: String(chat.id),
+        source: "bot",
+      }
     );
-    const ms = Date.now() - started;
+    const ms = queued?.ms ?? Date.now() - started;
     try {
       await sendWithToken(
         bot.token,
         chat.id,
-        `⚡ Auto SMS queued in <b>${ms}ms</b>\nDevice: <code>${escHtml(group.autoSend.deviceName || group.autoSend.deviceId)}</code>\nTo: <code>${escHtml(parsed.to)}</code>`
+        `⚡ Auto SMS queued in <b>${ms}ms</b>\nDevice: <code>${escHtml(group.autoSend.deviceName || group.autoSend.deviceId)}</code>\nGroup: <b>${escHtml(group.title || chat.id)}</b>\nTo: <code>${escHtml(parsed.to)}</code>`
       );
     } catch (_) {}
     return { ok: true, queued: true, ms };

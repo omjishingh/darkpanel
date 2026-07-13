@@ -42,7 +42,14 @@ function resolveProject(req, res) {
 }
 
 app.get("/api/health", (_, res) => {
-  res.json({ ok: true, global2FA: isGlobal2FAEnabled() });
+  const info = db.getDbInfo();
+  res.json({
+    ok: true,
+    global2FA: isGlobal2FAEnabled(),
+    users: info.users,
+    dataPath: info.path,
+    dataWarning: info.warning,
+  });
 });
 
 app.get("/api", (_, res) => {
@@ -93,6 +100,35 @@ app.delete("/api/admin/accounts/:userId", adminMiddleware, (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+app.get("/api/admin/backup", adminMiddleware, (_, res) => {
+  try {
+    const data = db.exportDb();
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="darkpanel-backup-${new Date().toISOString().slice(0, 10)}.json"`
+    );
+    res.send(JSON.stringify(data, null, 2));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/restore", adminMiddleware, (req, res) => {
+  try {
+    const payload = req.body?.users ? req.body : req.body?.data;
+    if (!payload) return res.status(400).json({ error: "JSON body with users required" });
+    const info = db.importDb(payload.users ? payload : { users: payload });
+    res.json({ ok: true, ...info });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/db-info", adminMiddleware, (_, res) => {
+  res.json(db.getDbInfo());
 });
 
 function extractLoginMeta(body = {}, req) {
@@ -545,7 +581,10 @@ app.get("/api/telegram/groups", authMiddleware, (req, res) => {
         telegramMt.findUserDeviceAutoSend(req.user.sub, deviceId) ||
         telegramUser.findDeviceAutoSend(req.user.sub, deviceId);
     }
-    res.json({ groups, binding });
+    const events = deviceId
+      ? db.listAutoSendEvents(req.user.sub, deviceId, 15)
+      : db.listAutoSendEvents(req.user.sub, null, 15);
+    res.json({ groups, binding, events, latest: events[0] || null });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -694,6 +733,16 @@ app.delete("/api/telegram/auto-send", authMiddleware, (req, res) => {
   }
 });
 
+app.get("/api/telegram/auto-send/events", authMiddleware, (req, res) => {
+  try {
+    const deviceId = req.query.deviceId || null;
+    const events = db.listAutoSendEvents(req.user.sub, deviceId, Number(req.query.limit) || 20);
+    res.json({ events, latest: events[0] || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Telegram USER account (MTProto) ────────────────────────
 app.get("/api/telegram/user", authMiddleware, (req, res) => {
   try {
@@ -791,6 +840,13 @@ app.listen(port, () => {
   console.log(`Web Panel: http://localhost:${port}/`);
   console.log(`Admin key: ${process.env.ADMIN_KEY ? "SET" : "NOT SET — set ADMIN_KEY in .env"}`);
   console.log(`Global 2FA: ${isGlobal2FAEnabled() ? "ON" : "OFF"}`);
+  try {
+    const info = db.getDbInfo();
+    console.log(`Data store: ${info.path} (${info.users} users)`);
+    if (info.warning) console.warn(`⚠️  ${info.warning}`);
+  } catch (e) {
+    console.warn("Data store init:", e.message);
+  }
   setTimeout(() => {
     telegramMt.restoreAllClients().catch((e) => console.warn("[mt-client] restore:", e.message));
   }, 1500);
