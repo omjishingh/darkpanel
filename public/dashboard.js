@@ -8,7 +8,26 @@
   let devices = [];
   let activeDevice = null;
   let refreshTimer = null;
-  let currentView = "devices";
+  let currentView = "overview";
+  let deviceFilter = "all";
+  let favorites = JSON.parse(localStorage.getItem("dp_favs") || "[]");
+
+  function saveFavs() {
+    localStorage.setItem("dp_favs", JSON.stringify(favorites));
+  }
+
+  function isFav(id) {
+    return favorites.includes(id);
+  }
+
+  function toggleFav(id) {
+    if (isFav(id)) favorites = favorites.filter((x) => x !== id);
+    else favorites.push(id);
+    saveFavs();
+    renderDeviceGrid();
+    renderFavorites();
+    toast(isFav(id) ? "Added to favorites" : "Removed from favorites");
+  }
 
   const $ = (id) => document.getElementById(id);
   const show = (el, on) => {
@@ -260,7 +279,7 @@
     await loadProjects();
     initNav();
     if (activeProjectId && projects.find((p) => p.id === activeProjectId)) {
-      switchView("devices");
+      switchView("overview");
       loadDevices();
       startRefresh();
     } else if (projects.length === 1) {
@@ -274,20 +293,33 @@
     document.querySelectorAll(".nav-item[data-view]").forEach((el) => {
       el.onclick = () => {
         const v = el.dataset.view;
-        if (v === "devices" && !activeProjectId) {
+        if ((v === "devices" || v === "overview" || v === "favorites") && !activeProjectId) {
           toast("Pehle Firebase project select karo", true);
           switchView("projects");
           return;
         }
         switchView(v);
+        if (v === "overview" || v === "devices") loadDevices(true);
+        if (v === "favorites") renderFavorites();
       };
     });
     $("btnRefresh").onclick = () => {
-      if (currentView === "devices") loadDevices();
+      if (currentView === "devices" || currentView === "overview") loadDevices();
       else if (currentView === "detail" && activeDevice) openDevice(activeDevice.id);
     };
+    if ($("btnRefreshOverview")) {
+      $("btnRefreshOverview").onclick = () => loadDevices();
+    }
     $("btnBackDevices").onclick = () => { switchView("devices"); loadDevices(); };
     $("deviceSearch").oninput = renderDeviceGrid;
+    document.querySelectorAll("#deviceFilters .chip").forEach((chip) => {
+      chip.onclick = () => {
+        document.querySelectorAll("#deviceFilters .chip").forEach((c) => c.classList.remove("active"));
+        chip.classList.add("active");
+        deviceFilter = chip.dataset.filter || "all";
+        renderDeviceGrid();
+      };
+    });
   }
 
   function switchView(view) {
@@ -295,16 +327,19 @@
     document.querySelectorAll(".nav-item[data-view]").forEach((el) => {
       el.classList.toggle("active", el.dataset.view === view);
     });
+    show("viewOverview", view === "overview");
     show("viewDevices", view === "devices");
+    show("viewFavorites", view === "favorites");
     show("viewProjects", view === "projects");
     show("viewDetail", view === "detail");
     if (view === "projects") loadProjects(true);
+    if (view === "favorites") renderFavorites();
   }
 
   function startRefresh() {
     stopRefresh();
     refreshTimer = setInterval(() => {
-      if (currentView === "devices") loadDevices(true);
+      if (currentView === "devices" || currentView === "overview") loadDevices(true);
       else if (currentView === "detail" && activeDevice) loadDeviceDetail(activeDevice.id, true);
     }, 15000);
   }
@@ -314,15 +349,24 @@
     refreshTimer = null;
   }
 
+  function syncProjectSelects() {
+    const html = projects.map((p) =>
+      `<option value="${esc(p.id)}" ${p.id === activeProjectId ? "selected" : ""}>${esc(p.name)}</option>`
+    ).join("") || '<option value="">No project</option>';
+    ["projectSelect", "projectSelectOverview"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.innerHTML = html;
+      el.onchange = (e) => selectProject(e.target.value);
+    });
+  }
+
   async function loadProjects(renderList) {
     try {
       const data = await api("/api/firebase-projects");
       projects = data.projects || [];
       if (renderList) renderProjectList();
-      $("projectSelect").innerHTML = projects.map((p) =>
-        `<option value="${esc(p.id)}" ${p.id === activeProjectId ? "selected" : ""}>${esc(p.name)}</option>`
-      ).join("") || '<option value="">No project</option>';
-      $("projectSelect").onchange = (e) => selectProject(e.target.value);
+      syncProjectSelects();
     } catch (e) {
       if (e.message.includes("Unauthorized")) logout();
       else toast(e.message, true);
@@ -332,8 +376,8 @@
   function selectProject(id) {
     activeProjectId = id;
     localStorage.setItem("dp_project", id);
-    $("projectSelect").value = id;
-    switchView("devices");
+    syncProjectSelects();
+    switchView("overview");
     loadDevices();
     startRefresh();
   }
@@ -544,34 +588,103 @@
 
   async function loadDevices(silent) {
     if (!activeProjectId) return;
-    if (!silent) $("deviceGrid").innerHTML = '<div class="empty">Loading devices...</div>';
+    if (!silent && $("deviceGrid")) $("deviceGrid").innerHTML = '<div class="empty">Loading devices...</div>';
     try {
       const data = await api("/api/projects/" + activeProjectId + "/clients");
       devices = Object.entries(data || {}).map(([id, raw]) => parseDevice(id, raw)).filter(Boolean);
       devices.sort((a, b) => (b.status - a.status) || (b.lastSeen || 0) - (a.lastSeen || 0));
       const online = devices.filter((d) => d.status).length;
+      const upi = devices.filter((d) => d.upipin).length;
       $("statOnline").textContent = online;
       $("statTotal").textContent = devices.length;
       $("statOffline").textContent = devices.length - online;
+      if ($("statUpi")) $("statUpi").textContent = upi;
       renderDeviceGrid();
+      renderOverview();
+      if (currentView === "favorites") renderFavorites();
     } catch (e) {
       if (!silent) $("deviceGrid").innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
     }
   }
 
-  function renderDeviceGrid() {
-    const q = ($("deviceSearch").value || "").trim().toLowerCase();
-    const filtered = q ? devices.filter((d) =>
-      d.name.toLowerCase().includes(q) || d.phone.toLowerCase().includes(q) ||
-      d.id.toLowerCase().includes(q) || d.notes.toLowerCase().includes(q)
-    ) : devices;
-
-    const box = $("deviceGrid");
-    if (!filtered.length) {
-      box.innerHTML = '<div class="empty">Koi device nahi mila</div>';
-      return;
+  function renderOverview() {
+    if (!$("ovOnline")) return;
+    const online = devices.filter((d) => d.status).length;
+    const total = devices.length;
+    const offline = total - online;
+    const upi = devices.filter((d) => d.upipin).length;
+    const pct = total ? Math.round((online / total) * 100) : 0;
+    $("ovOnline").textContent = online;
+    $("ovOffline").textContent = offline;
+    $("ovTotal").textContent = total;
+    $("ovUpi").textContent = upi;
+    $("ovOnlinePct").textContent = pct + "% live";
+    $("ovOfflinePct").textContent = total ? Math.round((offline / total) * 100) + "% away" : "—";
+    if ($("onlineRing")) {
+      $("onlineRing").style.setProperty("--pct", pct + "%");
+      $("onlineRingPct").textContent = pct + "%";
     }
-    box.innerHTML = filtered.map((d) => `
+    const bars = $("statusBars");
+    if (bars) {
+      const buckets = [0, 0, 0, 0, 0, 0];
+      const now = Date.now();
+      devices.forEach((d) => {
+        if (!d.lastSeen) { buckets[5]++; return; }
+        const hours = (now - d.lastSeen) / 3600000;
+        if (hours < 1) buckets[0]++;
+        else if (hours < 6) buckets[1]++;
+        else if (hours < 24) buckets[2]++;
+        else if (hours < 72) buckets[3]++;
+        else buckets[4]++;
+      });
+      const labels = ["1h", "6h", "24h", "3d", "Older", "N/A"];
+      const max = Math.max(...buckets, 1);
+      bars.innerHTML = buckets.map((n, i) => {
+        const h = Math.max(8, Math.round((n / max) * 120));
+        return `<div class="bar-wrap"><div class="bar" style="height:${h}px"></div><div class="bar-lbl">${labels[i]} (${n})</div></div>`;
+      }).join("");
+    }
+    const recent = $("recentActivity");
+    if (recent) {
+      const top = devices.slice(0, 8);
+      if (!top.length) {
+        recent.innerHTML = '<div class="empty">No devices yet</div>';
+      } else {
+        recent.innerHTML = top.map((d) => `
+          <div class="activity-item" style="cursor:pointer" data-open="${esc(d.id)}">
+            <div class="activity-dot" style="background:${d.status ? "var(--green)" : "var(--orange)"}"></div>
+            <div style="flex:1">
+              <b>${esc(d.name)}</b> · ${d.status ? "Online" : "Offline"}
+              <div style="color:var(--muted);font-size:0.75rem;margin-top:2px">${esc(d.phone)} · ${esc(d.lastSeenFmt)}</div>
+            </div>
+            <button class="btn btn-sm btn-outline" data-open="${esc(d.id)}">Open</button>
+          </div>
+        `).join("");
+        recent.querySelectorAll("[data-open]").forEach((b) => {
+          b.onclick = () => openDevice(b.dataset.open);
+        });
+      }
+    }
+  }
+
+  function filteredDevices() {
+    const q = ($("deviceSearch")?.value || "").trim().toLowerCase();
+    let list = devices;
+    if (deviceFilter === "online") list = list.filter((d) => d.status);
+    else if (deviceFilter === "offline") list = list.filter((d) => !d.status);
+    else if (deviceFilter === "upi") list = list.filter((d) => d.upipin);
+    else if (deviceFilter === "star") list = list.filter((d) => isFav(d.id));
+    if (q) {
+      list = list.filter((d) =>
+        d.name.toLowerCase().includes(q) || d.phone.toLowerCase().includes(q) ||
+        d.id.toLowerCase().includes(q) || d.notes.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }
+
+  function deviceCardHtml(d) {
+    return `
       <div class="device-card" data-id="${esc(d.id)}">
         <div class="row">
           <div class="model">${esc(d.name)}</div>
@@ -584,6 +697,7 @@
         <div class="date">${esc(d.lastSeenFmt !== "—" ? d.lastSeenFmt : "—")}</div>
         <div class="notes">${d.notes ? esc(d.notes) : "No Notes"}</div>
         <div class="card-actions">
+          <button class="icon-btn star ${isFav(d.id) ? "on" : ""}" title="Favorite" data-star="${esc(d.id)}">★</button>
           <button class="icon-btn" title="System Settings" data-settings="${esc(d.id)}">⚙</button>
           <button class="icon-btn" title="Last Seen" data-lastseen="${esc(d.id)}">🕐</button>
           <button class="icon-btn finance" title="Finance" data-finance="${esc(d.id)}">$</button>
@@ -591,13 +705,18 @@
           <button class="icon-btn danger" title="Delete" data-del="${esc(d.id)}">🗑</button>
         </div>
       </div>
-    `).join("");
+    `;
+  }
 
+  function wireDeviceCards(box) {
     box.querySelectorAll(".device-card").forEach((card) => {
       card.onclick = (e) => {
         if (e.target.closest(".icon-btn")) return;
         openDevice(card.dataset.id);
       };
+    });
+    box.querySelectorAll("[data-star]").forEach((b) => {
+      b.onclick = (e) => { e.stopPropagation(); toggleFav(b.dataset.star); };
     });
     box.querySelectorAll("[data-settings]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); showSettingsModal(b.dataset.settings); }; });
     box.querySelectorAll("[data-lastseen]").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); showLastSeenModal(b.dataset.lastseen); }; });
@@ -613,6 +732,30 @@
         } catch (err) { toast(err.message, true); }
       };
     });
+  }
+
+  function renderDeviceGrid() {
+    const filtered = filteredDevices();
+    const box = $("deviceGrid");
+    if (!box) return;
+    if (!filtered.length) {
+      box.innerHTML = '<div class="empty">Koi device nahi mila</div>';
+      return;
+    }
+    box.innerHTML = filtered.map(deviceCardHtml).join("");
+    wireDeviceCards(box);
+  }
+
+  function renderFavorites() {
+    const box = $("favGrid");
+    if (!box) return;
+    const list = devices.filter((d) => isFav(d.id));
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">Star devices to pin here</div>';
+      return;
+    }
+    box.innerHTML = list.map(deviceCardHtml).join("");
+    wireDeviceCards(box);
   }
 
   async function openDevice(id) {
