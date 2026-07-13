@@ -90,15 +90,29 @@
         <div class="topbar"><h2>Firebase Projects</h2></div>
         <div id="fbList"></div>
         <p id="fbEmpty" class="empty hidden">Koi Firebase nahi — neeche add karo</p>
-        <div class="section-title">Add New Firebase</div>
+
+        <div class="section-title">Upload APK (Auto Extract)</div>
+        <div class="card">
+          <label for="apkFileInput" class="apk-drop" id="apkDropZone">
+            <div style="font-size:1.5rem;margin-bottom:8px">📦</div>
+            <div style="font-weight:700;color:#fff;margin-bottom:4px">APK upload karo</div>
+            <div style="font-size:0.75rem;color:var(--muted)">Auto-extracts Firebase URL &amp; Secret / API Key</div>
+            <input id="apkFileInput" type="file" accept=".apk,.zip" class="hidden" />
+          </label>
+          <p id="apkStatus" class="sub" style="margin:10px 0 0"></p>
+          <button class="btn btn-block btn-cyan hidden" id="btnUseExtracted" style="margin-top:12px">Fill Form &amp; Continue</button>
+        </div>
+
+        <div class="section-title">Add Manually / Save</div>
         <div class="card">
           <label>Project Name</label>
           <input id="fbName" type="text" placeholder="e.g. Client 1" />
           <label>Firebase Database URL</label>
           <input id="fbUrl" type="url" placeholder="https://your-project.firebaseio.com" />
-          <label>Database Secret Key</label>
+          <label>Database Secret / API Key</label>
           <input id="fbSecret" type="password" placeholder="Firebase secret key" />
           <button class="btn btn-block" id="btnAddFb">Save &amp; Test</button>
+          <p class="note">APK se extract karke form fill ho jayega — phir Save &amp; Test dabao. Manual bhi daal sakte ho.</p>
         </div>
       </div>
 
@@ -222,6 +236,7 @@
   </div>
 
   <div id="toast" class="hidden"></div>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="/dashboard.js"></script>
 </body>
 </html>

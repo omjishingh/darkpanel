@@ -238,4 +238,18 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--c
 .finance-bank .bal { font-size: 1.1rem; font-weight: 800; color: var(--amber); margin-top: 4px; }
 .finance-bank .sub { font-size: 0.7rem; color: var(--muted); margin-top: 4px; }
 
-.empty { text-align: center; padding: 40px 20px; color: var(--muted); }
+.apk-drop {
+  display: block;
+  border: 2px dashed var(--border);
+  border-radius: 14px;
+  padding: 28px 16px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--bg2);
+  transition: border-color 0.2s, background 0.2s;
+}
+.apk-drop:hover, .apk-drop.drag {
+  border-color: var(--cyan-dim);
+  background: rgba(106, 207, 255, 0.06);
+}
+.apk-drop input { display: none; }

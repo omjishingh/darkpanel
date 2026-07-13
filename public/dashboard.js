@@ -376,6 +376,153 @@
     });
   }
 
+  let lastExtracted = null;
+
+  function bytesToString(uint8) {
+    let s = "";
+    for (let i = 0; i < uint8.length; i += 65536) {
+      s += String.fromCharCode(...uint8.subarray(i, i + 65536));
+    }
+    return s;
+  }
+
+  function matchFromBytes(uint8) {
+    const text = bytesToString(uint8);
+    const url =
+      text.match(/https:\/\/[a-z0-9_-]+\.firebaseio\.com/i)?.[0] ||
+      text.match(/https:\/\/[a-z0-9_-]+-default-rtdb\.[a-z0-9-]+\.firebasedatabase\.app/i)?.[0] ||
+      "";
+    const key =
+      text.match(/AIza[A-Za-z0-9_-]{35}/)?.[0] ||
+      text.match(/(?:databaseSecret|firebaseSecret|FIREBASE_SECRET|dbSecret)[=:"'\s]{1,12}([A-Za-z0-9_-]{24,})/i)?.[1] ||
+      "";
+    return { url, key };
+  }
+
+  async function extractFirebaseFromApk(file) {
+    if (typeof JSZip === "undefined") throw new Error("JSZip load nahi hua — page refresh karo");
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    let firebaseUrl = "";
+    let secret = "";
+    let projectId = "";
+
+    const tryFile = async (entry) => {
+      if (!entry || firebaseUrl && secret) return;
+      try {
+        const bytes = await entry.async("uint8array");
+        const found = matchFromBytes(bytes);
+        if (!firebaseUrl && found.url) firebaseUrl = found.url;
+        if (!secret && found.key) secret = found.key;
+      } catch (_) {}
+    };
+
+    await tryFile(zip.file("resources.arsc"));
+    for (const name of ["classes.dex", "classes2.dex", "classes3.dex", "classes4.dex"]) {
+      await tryFile(zip.file(name));
+      if (firebaseUrl && secret) break;
+    }
+
+    const gsCandidates = [
+      zip.file("google-services.json"),
+      zip.file("assets/google-services.json"),
+    ].filter(Boolean);
+    const gsRegex = zip.file(/google-services\.json$/i);
+    if (gsRegex && gsRegex[0]) gsCandidates.push(gsRegex[0]);
+
+    for (const entry of gsCandidates) {
+      try {
+        const json = JSON.parse(await entry.async("text"));
+        if (!firebaseUrl) firebaseUrl = json?.project_info?.firebase_url || "";
+        if (!projectId) projectId = json?.project_info?.project_id || "";
+        const client = json?.client?.[0];
+        if (!secret) secret = client?.api_key?.[0]?.current_key || "";
+        const dbUrl = client?.services?.analytics_service?.other_platform_oauth_client
+          ? null
+          : null;
+        void dbUrl;
+      } catch (_) {}
+    }
+
+    if (!firebaseUrl || !secret) {
+      for (const name of Object.keys(zip.files)) {
+        if (firebaseUrl && secret) break;
+        const f = zip.files[name];
+        if (f.dir) continue;
+        if (f._data && f._data.uncompressedSize > 8_000_000) continue;
+        if (!/\.(dex|arsc|json|xml|so|bin)$/i.test(name) && !name.includes("assets")) continue;
+        await tryFile(f);
+      }
+    }
+
+    if (!firebaseUrl && !secret) return null;
+    return { firebaseUrl, secret, projectId };
+  }
+
+  function setApkStatus(msg, isErr) {
+    const el = $("apkStatus");
+    el.textContent = msg || "";
+    el.style.color = isErr ? "#f87171" : "var(--muted)";
+  }
+
+  async function handleApkFile(file) {
+    if (!file) return;
+    const n = file.name.toLowerCase();
+    if (!n.endsWith(".apk") && !n.endsWith(".zip")) {
+      setApkStatus("Sirf .apk / .zip file support hai", true);
+      return;
+    }
+    setApkStatus("Extracting Firebase from APK...");
+    show("btnUseExtracted", false);
+    lastExtracted = null;
+    try {
+      const found = await extractFirebaseFromApk(file);
+      if (!found || (!found.firebaseUrl && !found.secret)) {
+        setApkStatus("APK se Firebase nahi mila — manual daalo", true);
+        return;
+      }
+      lastExtracted = found;
+      const bit = [];
+      if (found.firebaseUrl) bit.push("URL ✓");
+      if (found.secret) bit.push("Key ✓");
+      if (found.projectId) bit.push("Project: " + found.projectId);
+      setApkStatus("Extract OK — " + bit.join(" · "));
+      // auto-fill form
+      if (found.firebaseUrl) $("fbUrl").value = found.firebaseUrl;
+      if (found.secret) $("fbSecret").value = found.secret;
+      if (!$("fbName").value.trim()) {
+        $("fbName").value = found.projectId || file.name.replace(/\.(apk|zip)$/i, "");
+      }
+      show("btnUseExtracted", true);
+      toast("APK se Firebase mil gaya — Save & Test dabao");
+    } catch (e) {
+      setApkStatus(e.message || "Extract failed", true);
+    }
+  }
+
+  $("apkFileInput").onchange = (e) => handleApkFile(e.target.files?.[0]);
+  $("btnUseExtracted").onclick = () => {
+    if (!lastExtracted) return;
+    if (lastExtracted.firebaseUrl) $("fbUrl").value = lastExtracted.firebaseUrl;
+    if (lastExtracted.secret) $("fbSecret").value = lastExtracted.secret;
+    if (!$("fbName").value.trim() && lastExtracted.projectId) {
+      $("fbName").value = lastExtracted.projectId;
+    }
+    $("fbName").scrollIntoView({ behavior: "smooth", block: "center" });
+    toast("Form fill ho gaya — Save & Test dabao");
+  };
+
+  const drop = $("apkDropZone");
+  ["dragenter", "dragover"].forEach((ev) => {
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("drag"); });
+  });
+  ["dragleave", "drop"].forEach((ev) => {
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("drag"); });
+  });
+  drop.addEventListener("drop", (e) => {
+    const file = e.dataTransfer?.files?.[0];
+    if (file) handleApkFile(file);
+  });
+
   $("btnAddFb").onclick = async () => {
     const name = $("fbName").value.trim();
     const firebaseUrl = $("fbUrl").value.trim();
@@ -385,6 +532,10 @@
     try {
       await api("/api/firebase-projects", { method: "POST", body: JSON.stringify({ name, firebaseUrl, firebaseSecret }) });
       $("fbName").value = ""; $("fbUrl").value = ""; $("fbSecret").value = "";
+      lastExtracted = null;
+      show("btnUseExtracted", false);
+      setApkStatus("");
+      $("apkFileInput").value = "";
       toast("Firebase added!");
       await loadProjects(true);
     } catch (e) { toast(e.message, true); }
