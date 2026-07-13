@@ -610,8 +610,12 @@ app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) =>
       return res.status(400).json({ error: "projectId and deviceId required" });
     }
     db.getFirebaseProject(req.user.sub, projectId);
-    telegramUser.clearDeviceAutoSend(req.user.sub, deviceId);
-    telegramMt.clearUserDeviceAutoSend(req.user.sub, deviceId);
+    try {
+      telegramUser.clearDeviceAutoSend(req.user.sub, deviceId);
+    } catch (_) {}
+    try {
+      telegramMt.clearUserDeviceAutoSend(req.user.sub, deviceId);
+    } catch (_) {}
 
     const payload = {
       projectId,
@@ -619,20 +623,42 @@ app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) =>
       deviceName: deviceName || deviceId,
     };
 
+    const chatId = decodeURIComponent(req.params.chatId);
+    const preferUser = source === "user" || source !== "bot";
     let g = null;
-    const preferUser = source === "user";
+    let lastErr = null;
+
+    const tryUser = () => telegramMt.setUserGroupAutoSend(req.user.sub, chatId, payload);
+    const tryBot = () => telegramUser.setGroupAutoSend(req.user.sub, chatId, payload);
+
     if (preferUser) {
       try {
-        g = telegramMt.setUserGroupAutoSend(req.user.sub, req.params.chatId, payload);
-      } catch (_) {
-        g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, payload);
+        g = tryUser();
+      } catch (e) {
+        lastErr = e;
+        try {
+          g = tryBot();
+        } catch (e2) {
+          lastErr = e2;
+        }
       }
     } else {
       try {
-        g = telegramUser.setGroupAutoSend(req.user.sub, req.params.chatId, payload);
-      } catch (_) {
-        g = telegramMt.setUserGroupAutoSend(req.user.sub, req.params.chatId, payload);
+        g = tryBot();
+      } catch (e) {
+        lastErr = e;
+        try {
+          g = tryUser();
+        } catch (e2) {
+          lastErr = e2;
+        }
       }
+    }
+
+    if (!g) {
+      return res.status(400).json({
+        error: lastErr?.message || "Group not found — Sync my chats / refresh karke dobara try karo",
+      });
     }
     res.json({ ok: true, group: g });
   } catch (err) {

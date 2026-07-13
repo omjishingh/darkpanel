@@ -79,8 +79,13 @@ function deleteUserGroup(userId, chatId) {
 function setUserGroupAutoSend(userId, chatId, autoSend) {
   const data = getUserTg(userId);
   if (!data) throw new Error("User Telegram not connected");
-  const g = (data.groups || []).find((x) => String(x.chatId) === String(chatId));
-  if (!g) throw new Error("Group not found — sync / join first");
+  const id = String(chatId);
+  const g =
+    (data.groups || []).find((x) => String(x.chatId) === id) ||
+    (data.groups || []).find(
+      (x) => String(x.chatId).replace(/^-100/, "") === id.replace(/^-100/, "").replace(/^-/, "")
+    );
+  if (!g) throw new Error("Group not found — Sync my chats first");
   g.autoSend = autoSend
     ? {
         projectId: String(autoSend.projectId),

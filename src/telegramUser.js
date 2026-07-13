@@ -235,7 +235,7 @@ function setGroupAutoSend(userId, chatId, autoSend) {
 
 function clearDeviceAutoSend(userId, deviceId) {
   const bot = db.getTelegramBot(userId);
-  if (!bot) throw new Error("Bot not connected");
+  if (!bot) return { ok: true, cleared: 0 };
   let cleared = 0;
   for (const g of bot.groups || []) {
     if (g.autoSend && String(g.autoSend.deviceId) === String(deviceId)) {
