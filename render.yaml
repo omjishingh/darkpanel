@@ -16,4 +16,8 @@ services:
       - key: ADMIN_KEY
         sync: false
       - key: TELEGRAM_2FA_ENABLED
-        value: "false"
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
