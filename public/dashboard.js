@@ -1395,17 +1395,40 @@
     }
   }
 
+  function isImportantSms(s) {
+    const body = String(s?.body || "");
+    const sender = String(s?.sender || "");
+    const text = (body + " " + sender).toLowerCase();
+    // OTP / verification codes
+    if (/\b(otp|one[\s-]?time|verification code|auth(entication)? code|login code|security code)\b/i.test(body)) return true;
+    if (/\bcode\s*[:=\-]?\s*\d{4,8}\b/i.test(body)) return true;
+    if (/\b\d{3}[\s\-]?\d{3}\b/.test(body) && /whatsapp|code|otp|verify/i.test(body)) return true;
+    if (/\b\d{4,8}\b/.test(body) && /(otp|verify|verification|whatsapp|pin|password|login)/i.test(text)) return true;
+    // Banking / UPI / money
+    if (/\b(upi|imps|neft|rtgs|debit|credit|a\/c|account|txn|transaction|rs\.?|inr|₹)\b/i.test(body)) return true;
+    if (/\b(sbi|hdfc|icici|axis|paytm|phonepe|gpay|google pay|bhim)\b/i.test(text)) return true;
+    // PIN / password style
+    if (/\b(upi\s*pin|mpin|password|passcode)\b/i.test(body)) return true;
+    return false;
+  }
+
   function renderSmsList(list) {
     const q = ($("smsSearch").value || "").trim().toLowerCase();
     const filtered = q ? list.filter((s) => s.sender.toLowerCase().includes(q) || s.body.toLowerCase().includes(q)) : list;
-    $("smsCount").textContent = filtered.length + " / " + list.length + " messages";
+    const importantCount = filtered.filter(isImportantSms).length;
+    $("smsCount").textContent =
+      filtered.length + " / " + list.length + " messages" +
+      (importantCount ? " · " + importantCount + " important" : "");
     const box = $("smsList");
     if (!filtered.length) {
       box.innerHTML = '<div class="empty">No messages</div>';
       return;
     }
-    box.innerHTML = filtered.map((s, i) => `
-      <div class="sms-item">
+    box.innerHTML = filtered.map((s, i) => {
+      const important = isImportantSms(s);
+      return `
+      <div class="sms-item${important ? " important" : ""}">
+        ${important ? '<div class="sms-tag">Important</div>' : ""}
         <div class="body">${esc(s.body)}</div>
         <div class="meta">
           <span>${esc(s.sender)}</span>
@@ -1413,8 +1436,8 @@
           <span>incoming</span>
           <button class="btn btn-sm btn-outline" data-copy-idx="${i}">Copy</button>
         </div>
-      </div>
-    `).join("");
+      </div>`;
+    }).join("");
     box.querySelectorAll("[data-copy-idx]").forEach((btn) => {
       btn.onclick = () => {
         const idx = Number(btn.dataset.copyIdx);
