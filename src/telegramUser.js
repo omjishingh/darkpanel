@@ -291,8 +291,6 @@ async function refreshGroupTitles(userId) {
   };
 }
 
-const { firebasePutFast } = require("./firebase");
-
 const projectCache = new Map();
 
 function getProjectCached(userId, projectId) {
@@ -309,35 +307,32 @@ function getProjectCached(userId, projectId) {
 async function queueDeviceSms(userId, projectId, deviceId, to, message, from = 1, meta = null) {
   const started = Date.now();
   const project = getProjectCached(userId, projectId);
-  const payload = {
-    from: from || 1,
-    to: String(to),
-    message: String(message),
-    isSended: false,
-    queuedAt: Date.now(),
-  };
-  firebasePutFast(
+  await firebasePut(
     project.firebaseUrl,
     project.firebaseSecret,
     `clients/${deviceId}/webhookEvent/sendSms`,
-    payload
+    {
+      from: from || 1,
+      to: String(to),
+      message: String(message),
+      isSended: false,
+      queuedAt: Date.now(),
+    }
   );
   const ms = Date.now() - started;
   if (meta) {
-    setImmediate(() => {
-      try {
-        db.pushAutoSendEvent(userId, {
-          ms,
-          deviceId,
-          deviceName: meta.deviceName || deviceId,
-          groupTitle: meta.groupTitle,
-          chatId: meta.chatId,
-          to,
-          preview: message,
-          source: meta.source || "bot",
-        });
-      } catch (_) {}
-    });
+    try {
+      db.pushAutoSendEvent(userId, {
+        ms,
+        deviceId,
+        deviceName: meta.deviceName || deviceId,
+        groupTitle: meta.groupTitle,
+        chatId: meta.chatId,
+        to,
+        preview: message,
+        source: meta.source || "bot",
+      });
+    } catch (_) {}
   }
   return { ms };
 }

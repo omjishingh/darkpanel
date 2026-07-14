@@ -83,6 +83,7 @@ async function firebasePatch(firebaseUrl, firebaseSecret, path, data) {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
+    agent: pickAgent(base),
   });
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw new Error("PERMISSION_DENIED");
