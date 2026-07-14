@@ -1,4 +1,0 @@
-/var/hostpanel/uploads/*
-/var/hostpanel/data/*
-/var/hostpanel/apps/*
-.env
