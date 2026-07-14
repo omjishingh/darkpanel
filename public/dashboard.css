@@ -241,11 +241,29 @@ html[data-theme="dark"] textarea {
 .kpi-card .icon {
   position: absolute; right: 14px; top: 14px; width: 40px; height: 40px;
   border-radius: 10px; display: flex; align-items: center; justify-content: center;
-  font-size: 1.1rem;
 }
+.kpi-card .icon svg { display: block; width: 20px; height: 20px; }
 .kpi-card .trend { font-size: 0.75rem; margin-top: 6px; font-weight: 600; }
 .trend.up { color: var(--green); }
 .trend.down { color: var(--red); }
+.btn-ico { display: inline-block; vertical-align: -2px; margin-right: 4px; }
+.search-box { position: relative; display: flex; align-items: center; }
+.search-box .search-ico {
+  position: absolute; left: 12px; color: var(--muted); pointer-events: none; z-index: 1;
+}
+.search-box input { padding-left: 36px !important; }
+.apk-ico { color: var(--primary); margin-bottom: 8px; text-align: center; }
+.apk-ico svg { display: inline-block; }
+.modal-ico {
+  display: inline-flex; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--primary-soft); color: var(--primary);
+  align-items: center; justify-content: center; flex-shrink: 0;
+}
+.modal-ico.square { border-radius: 8px; background: #e8f0ff; color: var(--blue, #16b1ff); }
+.modal-head { display: flex; align-items: center; gap: 10px; }
+.icon-btn .ico { display: flex; align-items: center; justify-content: center; }
+.icon-btn .ico svg { display: block; }
+.btn-icon svg { display: block; }
 
 .filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .chip {
