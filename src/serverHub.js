@@ -58,7 +58,8 @@ function readApps() {
 }
 
 function writeApps(data) {
-  ensureAppsConfig();
+  const dir = path.dirname(APPS_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const tmp = APPS_PATH + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
   fs.renameSync(tmp, APPS_PATH);
