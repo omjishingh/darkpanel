@@ -41,6 +41,7 @@ function sanitizeUserTg(userId) {
             projectId: g.autoSend.projectId,
             deviceId: g.autoSend.deviceId,
             deviceName: g.autoSend.deviceName || g.autoSend.deviceId,
+            from: g.autoSend.from === 2 ? 2 : 1,
           }
         : null,
       addedAt: g.addedAt || null,
@@ -91,6 +92,7 @@ function setUserGroupAutoSend(userId, chatId, autoSend) {
         projectId: String(autoSend.projectId),
         deviceId: String(autoSend.deviceId),
         deviceName: String(autoSend.deviceName || autoSend.deviceId),
+        from: Number(autoSend.from) === 2 ? 2 : 1,
       }
     : null;
   saveUserTg(userId, data);
@@ -184,7 +186,7 @@ function attachMessageHandler(userId, client) {
         group.autoSend.deviceId,
         parsed.to,
         parsed.message,
-        1,
+        group.autoSend.from === 2 ? 2 : 1,
         {
           deviceName: group.autoSend.deviceName,
           groupTitle: group.title,
@@ -195,7 +197,7 @@ function attachMessageHandler(userId, client) {
       const ms = queued?.ms ?? Date.now() - started;
       try {
         await client.sendMessage(chatId, {
-          message: `⚡ Token/SMS queued in ${ms}ms\nDevice: ${group.autoSend.deviceName || group.autoSend.deviceId}\nGroup: ${group.title || chatId}\nTo: ${parsed.to}`,
+          message: `⚡ Token/SMS queued in ${ms}ms\nDevice: ${group.autoSend.deviceName || group.autoSend.deviceId}\nGroup: ${group.title || chatId}\nSIM: ${group.autoSend.from === 2 ? 2 : 1}\nTo: ${parsed.to}`,
         });
       } catch (_) {}
     } catch (err) {

@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const { firebaseGet, firebasePut, firebasePatch, firebaseDelete, testConnection } = require("./firebase");
-const { createToken, authMiddleware, requireOwner, requireKeyPerm } = require("./auth");
+const { createToken, authMiddleware, requireOwner, requireKeyPerm, requireServerAdmin, isServerAdminUser } = require("./auth");
 const {
   send2FACode,
   verify2FACode,
@@ -16,6 +16,7 @@ const db = require("./db");
 const { buildFinanceReport } = require("./financeParser");
 const telegramUser = require("./telegramUser");
 const telegramMt = require("./telegramMtClient");
+const serverHub = require("./serverHub");
 
 const EXPIRES_IN_MS = {
   "30m": 30 * 60 * 1000,
@@ -80,6 +81,9 @@ function guestRestrictions(req, res, next) {
   if (path.startsWith("/api/security/")) {
     return res.status(403).json({ error: "Owner access required" });
   }
+  if (path.startsWith("/api/server/")) {
+    return res.status(403).json({ error: "Owner access required" });
+  }
   if (path.startsWith("/api/telegram/")) {
     return res.status(403).json({ error: "Guests cannot access Telegram settings" });
   }
@@ -120,6 +124,7 @@ app.get("/api/health", (_, res) => {
     users: info.users,
     dataPath: info.path,
     dataWarning: info.warning,
+    serverHub: serverHub.isEnabled(),
   });
 });
 
@@ -202,6 +207,87 @@ app.get("/api/admin/db-info", adminMiddleware, (_, res) => {
   res.json(db.getDbInfo());
 });
 
+// ─── Server Hub (VPS deploy manager) ─────────────────────────
+app.get("/api/server/enabled", (_, res) => {
+  res.json({
+    enabled: serverHub.isEnabled(),
+    serverAdmin: serverHub.getServerAdminUsername(),
+  });
+});
+
+app.get("/api/server/apps", authMiddleware, requireServerAdmin, async (_, res) => {
+  try {
+    res.json(await serverHub.getAppsStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/server/apps", authMiddleware, requireServerAdmin, (req, res) => {
+  try {
+    const app = serverHub.addApp(req.body || {});
+    res.status(201).json({ ok: true, app });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/server/apps/:appId", authMiddleware, requireServerAdmin, (req, res) => {
+  try {
+    res.json(serverHub.deleteApp(req.params.appId));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/server/deploy/:appId", authMiddleware, requireServerAdmin, async (req, res) => {
+  try {
+    const log = await serverHub.deployApp(req.params.appId, { trigger: "manual" });
+    res.json({ ok: true, log });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/server/:action/:appId", authMiddleware, requireServerAdmin, async (req, res) => {
+  const { action, appId } = req.params;
+  if (!["restart", "stop", "start"].includes(action)) {
+    return res.status(400).json({ error: "Invalid action" });
+  }
+  try {
+    res.json(await serverHub.pm2Action(appId, action));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/server/logs/:appId", authMiddleware, requireServerAdmin, async (req, res) => {
+  try {
+    res.json(await serverHub.getAppLogs(req.params.appId, req.query.lines));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GitHub auto-deploy webhook (like Render)
+app.post("/api/deploy/webhook/:appId", async (req, res) => {
+  try {
+    const secret = req.query.secret || req.headers["x-hub-signature-256"];
+    const app = serverHub.verifyWebhook(req.params.appId, req.query.secret);
+    const check = serverHub.handleGithubPush(req.body || {}, app);
+    if (check.skipped) {
+      return res.json({ ok: true, skipped: true, reason: check.reason });
+    }
+    const log = await serverHub.deployApp(app.id, {
+      trigger: "github",
+      commit: check.commit,
+    });
+    res.json({ ok: true, deployed: true, log });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 function extractLoginMeta(body = {}, req) {
   return {
     deviceId: String(body.deviceId || body.androidId || "").slice(0, 128) || null,
@@ -244,6 +330,8 @@ app.post("/api/auth/login", async (req, res) => {
       username: user.username,
       userId: user.id,
       firebaseProjects: db.getFirebaseProjects(user.id),
+      serverHub: serverHub.isEnabled(),
+      serverAdmin: isServerAdminUser(user.username),
     });
   } catch (err) {
     res.status(500).json({ error: err.message || "Login failed" });
@@ -275,6 +363,8 @@ app.post("/api/auth/verify-2fa", async (req, res) => {
       username: user.username,
       userId: user.id,
       firebaseProjects: db.getFirebaseProjects(user.id),
+      serverHub: serverHub.isEnabled(),
+      serverAdmin: isServerAdminUser(user.username),
     });
   } catch (err) {
     res.status(500).json({ error: err.message || "2FA verify failed" });
@@ -344,6 +434,8 @@ app.get("/api/auth/me", authMiddleware, guestRestrictions, (req, res) => {
     telegramBotConnected: !!(user.telegramBot && user.telegramBot.token),
     global2FA: isGlobal2FAEnabled(),
     firebaseProjects: db.getFirebaseProjects(user.id),
+    serverHub: serverHub.isEnabled(),
+    serverAdmin: isServerAdminUser(user.username),
   };
   if (scope === "guest" && req.user.keyId) {
     payload.keyId = req.user.keyId;
@@ -999,10 +1091,11 @@ app.delete("/api/telegram/groups/:chatId", authMiddleware, guestRestrictions, re
 
 app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
-    const { projectId, deviceId, deviceName, source } = req.body || {};
+    const { projectId, deviceId, deviceName, source, from, sim } = req.body || {};
     if (!projectId || !deviceId) {
       return res.status(400).json({ error: "projectId and deviceId required" });
     }
+    const simSlot = Number(from ?? sim) === 2 ? 2 : 1;
     db.getFirebaseProject(req.user.sub, projectId);
     try {
       telegramUser.clearDeviceAutoSend(req.user.sub, deviceId);
@@ -1015,6 +1108,7 @@ app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, guestRestrict
       projectId,
       deviceId,
       deviceName: deviceName || deviceId,
+      from: simSlot,
     };
 
     const chatId = decodeURIComponent(req.params.chatId);
@@ -1195,6 +1289,10 @@ app.listen(port, () => {
   console.log(`Web Panel: http://localhost:${port}/`);
   console.log(`Admin key: ${process.env.ADMIN_KEY ? "SET" : "NOT SET — set ADMIN_KEY in .env"}`);
   console.log(`Global 2FA: ${isGlobal2FAEnabled() ? "ON" : "OFF"}`);
+  console.log(`Server Hub: ${serverHub.isEnabled() ? "ON" : "OFF"}`);
+  if (serverHub.isEnabled()) {
+    console.log(`Server admin user: ${serverHub.getServerAdminUsername()}`);
+  }
   try {
     const info = db.getDbInfo();
     console.log(`Data store: ${info.path} (${info.users} users)`);
