@@ -59,6 +59,7 @@ function authMiddleware(req, res, next) {
         if (key.expiresAt && new Date(key.expiresAt).getTime() < Date.now()) {
           return res.status(401).json({ error: "Access key expired" });
         }
+        decoded.permissions = db.normalizePermissions(key.permissions);
       }
       try {
         db.touchSession(userId, sid);
@@ -76,6 +77,18 @@ function requireOwner(req, res, next) {
     return res.status(403).json({ error: "Owner access required" });
   }
   next();
+}
+
+/** Guest must have permission; owners always pass */
+function requireKeyPerm(perm) {
+  return (req, res, next) => {
+    if (req.user?.scope !== "guest") return next();
+    const perms = req.user.permissions || db.getAccessKeyPermissions(req.user.sub, req.user.keyId);
+    if (!perms || !perms[perm]) {
+      return res.status(403).json({ error: `Permission denied: ${perm}` });
+    }
+    next();
+  };
 }
 
 function requireScope(...allowed) {
@@ -103,6 +116,7 @@ module.exports = {
   createToken,
   authMiddleware,
   requireOwner,
+  requireKeyPerm,
   requireScope,
   getUserProject,
 };

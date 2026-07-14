@@ -15,9 +15,60 @@
   let favorites = JSON.parse(localStorage.getItem("dp_favs") || "[]");
   let currentTheme = { preset: "purple" };
   let accessKeysCache = [];
+  let guestPerms = {
+    devices: true,
+    messages: true,
+    send_sms: true,
+    forwarding: true,
+    notes: true,
+    delete_device: true,
+    finance: true,
+  };
 
   function isGuest() {
     return userScope === "guest";
+  }
+
+  function hasPerm(p) {
+    if (!isGuest()) return true;
+    return !!(guestPerms && guestPerms[p]);
+  }
+
+  function applyGuestPermsUi() {
+    if (!isGuest()) {
+      document.querySelectorAll("[data-need-perm]").forEach((el) => {
+        el.classList.remove("hidden");
+        el.style.display = "";
+      });
+      return;
+    }
+    const map = {
+      messages: ["[data-panel=sms]", "#panelSms"],
+      send_sms: ["[data-panel=send]", "#panelSend", "#btnSendSms"],
+      forwarding: ["#detailBtnForward"],
+      notes: ["#detailNotes", "#btnSaveNotes"],
+      delete_device: ["#detailBtnDelete"],
+      finance: ["#detailBtnFinance"],
+    };
+    Object.entries(map).forEach(([perm, sels]) => {
+      const ok = hasPerm(perm);
+      sels.forEach((sel) => {
+        document.querySelectorAll(sel).forEach((el) => {
+          el.classList.toggle("hidden", !ok);
+        });
+      });
+    });
+    // Send Auto needs Telegram — guests never
+    ["#btnSendAuto", "#btnSendAutoOff", "#sendAutoStatus", "#sendAutoLatest", "#sendAutoEvents"].forEach((sel) => {
+      document.querySelectorAll(sel).forEach((el) => el.classList.toggle("hidden", isGuest()));
+    });
+    // if no messages, leave send tab; if no send, leave sms
+    if (!hasPerm("messages") && hasPerm("send_sms")) {
+      document.querySelectorAll('[data-panel="send"]').forEach((t) => t.classList.add("active"));
+      document.querySelectorAll('[data-panel="sms"]').forEach((t) => t.classList.remove("active"));
+      show("panelSms", false);
+      show("panelSend", true);
+    }
   }
 
   function saveFavs() {
@@ -58,8 +109,9 @@
         const main = document.querySelector(".main");
         if (main) main.insertBefore(banner, main.firstChild);
       }
-      banner.textContent = "Guest access (temporary key) — Devices & SMS only. Firebase / Security / Themes hidden.";
+      banner.textContent = "Guest access (temporary key) — limited by permissions set on the key.";
       banner.classList.remove("hidden");
+      applyGuestPermsUi();
     } else if (banner) {
       banner.classList.add("hidden");
     }
@@ -308,6 +360,7 @@
         .then((d) => {
           userScope = d.scope || "owner";
           localStorage.setItem("dp_scope", userScope);
+          if (d.permissions) guestPerms = d.permissions;
           if (d.theme) applyTheme(d.theme);
           enterApp(d.username, d);
         })
@@ -336,6 +389,7 @@
         body: JSON.stringify({ key, client: "web" }),
       });
       persistAuth(data);
+      if (data.permissions) guestPerms = data.permissions;
       enterApp(data.username, data);
     } catch (e) {
       setErr("keyLoginErr", e.message);
@@ -448,6 +502,7 @@
       userScope = me.scope;
       localStorage.setItem("dp_scope", userScope);
     }
+    if (me?.permissions) guestPerms = me.permissions;
     if (me?.theme) applyTheme(me.theme);
     if (me?.sessionId) {
       authSessionId = me.sessionId;
@@ -733,6 +788,19 @@
         .map((k) => {
           const expired = k.expiresAt && Date.parse(k.expiresAt) < Date.now();
           const status = k.revoked ? "Revoked" : expired ? "Expired" : "Active";
+          const perms = k.permissions || {};
+          const labels = {
+            messages: "SMS read",
+            send_sms: "SMS send",
+            forwarding: "Forward",
+            notes: "Notes",
+            delete_device: "Delete",
+            finance: "Finance",
+          };
+          const chips = Object.keys(labels)
+            .filter((id) => perms[id])
+            .map((id) => `<span class="perm-chip">${labels[id]}</span>`)
+            .join("") || '<span class="perm-chip">Devices</span>';
           return `<div class="akey-row">
             <div>
               <div><b>${esc(k.label)}</b> · ${esc(status)}</div>
@@ -740,6 +808,7 @@
                 ${esc(k.keyPrefix)}… · Expires ${esc(fmtDate(parseTs(k.expiresAt) || Date.parse(k.expiresAt)))}<br/>
                 Last used ${k.lastUsedAt ? esc(fmtDate(parseTs(k.lastUsedAt) || Date.parse(k.lastUsedAt))) : "never"}
               </div>
+              <div class="perm-chips">${chips}</div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <button class="btn btn-sm btn-outline" data-key-act="${esc(k.id)}">Activity</button>
@@ -774,10 +843,17 @@
   async function createAccessKey() {
     const label = ($("keyLabel")?.value || "").trim() || "Access key";
     const expiresIn = $("keyExpires")?.value || "1h";
+    const permissions = Array.from(document.querySelectorAll("#keyPerms input[type=checkbox]:checked")).map(
+      (el) => el.value
+    );
+    if (!permissions.length) {
+      toast("Kam se kam ek permission select karo", true);
+      return;
+    }
     try {
       const data = await api("/api/security/access-keys", {
         method: "POST",
-        body: JSON.stringify({ label, expiresIn }),
+        body: JSON.stringify({ label, expiresIn, permissions }),
       });
       show("keyCreatedBox", true);
       $("keyCreatedValue").textContent = data.key || "";
@@ -803,14 +879,30 @@
         return;
       }
       $("keyActivityList").innerHTML = list
-        .map(
-          (a) => `<div class="activity-item">
-            <div><b>${esc(a.action)}</b> — ${esc(a.detail || "")}</div>
+        .map((a) => {
+          const title =
+            a.action === "login"
+              ? "Login"
+              : a.action === "logout"
+                ? "Logout"
+                : a.action === "send-sms"
+                  ? "SMS sent"
+                  : a.action === "forwarding"
+                    ? "Forward"
+                    : a.action === "notes"
+                      ? "Notes"
+                      : a.action === "delete"
+                        ? "Deleted device"
+                        : a.action === "revoke"
+                          ? "Key revoked"
+                          : esc(a.action);
+          return `<div class="activity-item">
+            <div><b>${title}</b> — ${esc(a.detail || "")}</div>
             <div class="muted">${esc(a.client || "")} · IP ${esc(a.ip || "—")} · ${esc(
             fmtDate(parseTs(a.at) || Date.parse(a.at || a.createdAt))
           )}</div>
-          </div>`
-        )
+          </div>`;
+        })
         .join("");
     } catch (e) {
       $("keyActivityList").innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
@@ -1270,13 +1362,19 @@
 
   async function loadDeviceDetail(id, silent) {
     try {
-      const [raw, smsData] = await Promise.all([
-        api("/api/projects/" + activeProjectId + "/clients/" + id),
-        api("/api/projects/" + activeProjectId + "/messages/" + id),
-      ]);
+      const raw = await api("/api/projects/" + activeProjectId + "/clients/" + id);
       activeDevice = parseDevice(id, raw);
       renderDeviceDetail();
-      const sms = parseSms(smsData);
+      applyGuestPermsUi();
+      let sms = [];
+      if (hasPerm("messages")) {
+        try {
+          const smsData = await api("/api/projects/" + activeProjectId + "/messages/" + id);
+          sms = parseSms(smsData);
+        } catch (e) {
+          if (!silent) toast(e.message, true);
+        }
+      }
       window._detailSms = sms;
       renderSmsList(sms);
       if (!silent) toast("Device updated");

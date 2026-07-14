@@ -666,3 +666,33 @@ html[data-theme="dark"] textarea {
   font-weight: 600;
   margin-bottom: 14px;
 }
+.key-perms {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+.key-perm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text);
+}
+.key-perm input { width: auto; margin: 0; }
+.perm-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.perm-chip {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}

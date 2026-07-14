@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const { firebaseGet, firebasePut, firebasePatch, firebaseDelete, testConnection } = require("./firebase");
-const { createToken, authMiddleware, requireOwner } = require("./auth");
+const { createToken, authMiddleware, requireOwner, requireKeyPerm } = require("./auth");
 const {
   send2FACode,
   verify2FACode,
@@ -47,6 +47,7 @@ function sessionMetaFromReq(req, body = {}) {
 function logGuestActivity(req, action, detail) {
   if (req.user?.scope !== "guest" || !req.user.keyId) return;
   try {
+    if (!db.MAIN_KEY_ACTIONS.has(String(action))) return;
     db.logKeyActivity(req.user.sub, req.user.keyId, {
       action,
       detail,
@@ -298,10 +299,11 @@ app.post("/api/auth/login-key", async (req, res) => {
     db.markAccessKeyUsed(user.id, accessKey.id);
     db.logKeyActivity(user.id, accessKey.id, {
       action: "login",
-      detail: `Guest login via key ${accessKey.keyPrefix}…`,
+      detail: `Login on ${sessionMeta.client || "web"}${sessionMeta.ip ? ` · IP ${sessionMeta.ip}` : ""}`,
       client: sessionMeta.client,
       ip: sessionMeta.ip,
     });
+    const permissions = db.normalizePermissions(accessKey.permissions);
     const token = createToken(
       { id: user.id, username: user.username },
       {
@@ -318,6 +320,7 @@ app.post("/api/auth/login-key", async (req, res) => {
       scope: "guest",
       keyId: accessKey.id,
       keyLabel: accessKey.label,
+      permissions,
       username: user.username,
       userId: user.id,
       firebaseProjects: db.getFirebaseProjects(user.id),
@@ -347,6 +350,8 @@ app.get("/api/auth/me", authMiddleware, guestRestrictions, (req, res) => {
     const keys = user.accessKeys || [];
     const ak = keys.find((k) => k.id === req.user.keyId);
     payload.keyLabel = ak ? ak.label : null;
+    payload.permissions =
+      req.user.permissions || db.getAccessKeyPermissions(user.id, req.user.keyId);
   }
   res.json(payload);
 });
@@ -475,16 +480,23 @@ app.get("/api/security/access-keys", authMiddleware, guestRestrictions, requireO
 
 app.post("/api/security/access-keys", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
-    const { label, expiresIn } = req.body || {};
+    const { label, expiresIn, permissions } = req.body || {};
     const ms = EXPIRES_IN_MS[String(expiresIn || "")];
     if (!ms) {
       return res.status(400).json({
         error: "expiresIn must be one of: 30m, 1h, 6h, 24h, 7d",
       });
     }
+    const permsList = Array.isArray(permissions) ? permissions : null;
+    if (!permsList || permsList.length === 0) {
+      return res.status(400).json({
+        error: "Select at least one permission (SMS read, send, forward, etc.)",
+      });
+    }
     const { key, record } = db.createAccessKey(req.user.sub, {
       label: label || "Access key",
       expiresInMs: ms,
+      permissions: ["devices", ...permsList],
     });
     res.status(201).json({ ok: true, key, accessKey: record });
   } catch (err) {
@@ -514,7 +526,7 @@ app.get(
   requireOwner,
   (req, res) => {
     try {
-      const activity = db.listKeyActivity(req.user.sub, req.params.id);
+      const activity = db.listKeyActivity(req.user.sub, req.params.id, { mainOnly: true });
       res.json({ activity });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -527,7 +539,7 @@ app.get("/api/security/my-activity", authMiddleware, (req, res) => {
     if (req.user.scope !== "guest" || !req.user.keyId) {
       return res.status(403).json({ error: "Guest key session required" });
     }
-    const activity = db.listKeyActivity(req.user.sub, req.user.keyId);
+    const activity = db.listKeyActivity(req.user.sub, req.user.keyId, { mainOnly: true });
     res.json({ activity });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -603,16 +615,20 @@ app.get("/api/projects/:projectId/dashboard", authMiddleware, guestRestrictions,
   const project = resolveProject(req, res);
   if (!project) return;
   try {
-    logGuestActivity(req, "dashboard", `project ${project.id}`);
     const clients = await firebaseGet(project.firebaseUrl, project.firebaseSecret, "clients");
+    const canReadSms =
+      req.user?.scope !== "guest" ||
+      !!(req.user.permissions || {}).messages;
     const deviceIds = clients ? Object.keys(clients) : [];
     const messages = {};
-    for (const id of deviceIds.slice(0, 50)) {
-      try {
-        messages[id] = await firebaseGet(project.firebaseUrl, project.firebaseSecret, `messages/${id}`);
-        if (messages[id] == null) messages[id] = {};
-      } catch {
-        messages[id] = {};
+    if (canReadSms) {
+      for (const id of deviceIds.slice(0, 50)) {
+        try {
+          messages[id] = await firebaseGet(project.firebaseUrl, project.firebaseSecret, `messages/${id}`);
+          if (messages[id] == null) messages[id] = {};
+        } catch {
+          messages[id] = {};
+        }
       }
     }
     res.json({
@@ -629,7 +645,6 @@ app.get("/api/projects/:projectId/clients", authMiddleware, guestRestrictions, a
   const project = resolveProject(req, res);
   if (!project) return;
   try {
-    logGuestActivity(req, "clients", `list clients on ${project.id}`);
     const data = await firebaseGet(project.firebaseUrl, project.firebaseSecret, "clients");
     res.json(data || {});
   } catch (err) {
@@ -641,7 +656,6 @@ app.get("/api/projects/:projectId/clients/:id", authMiddleware, guestRestriction
   const project = resolveProject(req, res);
   if (!project) return;
   try {
-    logGuestActivity(req, "clients", `view client ${req.params.id}`);
     const data = await firebaseGet(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`);
     res.json(data || null);
   } catch (err) {
@@ -649,146 +663,198 @@ app.get("/api/projects/:projectId/clients/:id", authMiddleware, guestRestriction
   }
 });
 
-app.delete("/api/projects/:projectId/clients/:id", authMiddleware, guestRestrictions, async (req, res) => {
-  const project = resolveProject(req, res);
-  if (!project) return;
-  try {
-    logGuestActivity(req, "clients", `delete client ${req.params.id}`);
-    await firebaseDelete(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/api/projects/:projectId/messages/:deviceId", authMiddleware, guestRestrictions, async (req, res) => {
-  const project = resolveProject(req, res);
-  if (!project) return;
-  try {
-    const data = await firebaseGet(
-      project.firebaseUrl,
-      project.firebaseSecret,
-      `messages/${req.params.deviceId}`
-    );
-    res.json(data || {});
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/api/projects/:projectId/finance/:deviceId", authMiddleware, guestRestrictions, async (req, res) => {
-  const project = resolveProject(req, res);
-  if (!project) return;
-  try {
-    const messages = await firebaseGet(
-      project.firebaseUrl,
-      project.firebaseSecret,
-      `messages/${req.params.deviceId}`
-    );
-    const report = buildFinanceReport(messages);
-    res.json({
-      deviceId: req.params.deviceId,
-      projectName: project.name,
-      ...report,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/projects/:projectId/clients/:id/send-sms", authMiddleware, guestRestrictions, async (req, res) => {
-  const project = resolveProject(req, res);
-  if (!project) return;
-  try {
-    const { from, to, message } = req.body || {};
-    if (!to || !message) {
-      return res.status(400).json({ error: "to and message required" });
+app.delete(
+  "/api/projects/:projectId/clients/:id",
+  authMiddleware,
+  guestRestrictions,
+  requireKeyPerm("delete_device"),
+  async (req, res) => {
+    const project = resolveProject(req, res);
+    if (!project) return;
+    try {
+      logGuestActivity(req, "delete", `Deleted device ${req.params.id}`);
+      await firebaseDelete(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-    await firebasePut(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}/webhookEvent/sendSms`, {
-      from: from || 1,
-      to,
-      message,
-      isSended: false,
-    });
-    logGuestActivity(req, "send-sms", `to ${to} on device ${req.params.id}`);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
-});
+);
 
-app.patch("/api/projects/:projectId/clients/:id/notes", authMiddleware, guestRestrictions, async (req, res) => {
-  const project = resolveProject(req, res);
-  if (!project) return;
-  try {
-    const { notes } = req.body || {};
-    await firebasePatch(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`, {
-      notes: String(notes || ""),
-    });
-    logGuestActivity(req, "notes", `update notes on ${req.params.id}`);
-    res.json({ ok: true, notes: String(notes || "") });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, guestRestrictions, async (req, res) => {
-  const project = resolveProject(req, res);
-  if (!project) return;
-  try {
-    const { type, sim, to, active } = req.body || {};
-    if (!type || !["call", "sms"].includes(String(type).toLowerCase())) {
-      return res.status(400).json({ error: "type must be call or sms" });
+app.get(
+  "/api/projects/:projectId/messages/:deviceId",
+  authMiddleware,
+  guestRestrictions,
+  requireKeyPerm("messages"),
+  async (req, res) => {
+    const project = resolveProject(req, res);
+    if (!project) return;
+    try {
+      const data = await firebaseGet(
+        project.firebaseUrl,
+        project.firebaseSecret,
+        `messages/${req.params.deviceId}`
+      );
+      res.json(data || {});
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-    const simSlot = Number(sim) === 2 ? 2 : 1;
-    const isActive = active !== false;
-    const payload = {
-      type: String(type).toLowerCase(),
-      sim: simSlot,
-      to: String(to || ""),
-      active: isActive,
-      isSended: false,
-    };
-    await firebasePut(
-      project.firebaseUrl,
-      project.firebaseSecret,
-      `clients/${req.params.id}/webhookEvent/forwarding`,
-      payload
-    );
-    const statusField = type === "call" ? "callForward" : "smsForward";
-    await firebasePatch(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`, {
-      [statusField]: isActive ? String(to || "active") : "inactive",
-      forwardTo: String(to || ""),
-    });
-    logGuestActivity(req, "forwarding", `${type} on ${req.params.id}`);
-    res.json({ ok: true, ...payload });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
-});
+);
 
-app.get("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, guestRestrictions, async (req, res) => {
-  const project = resolveProject(req, res);
-  if (!project) return;
-  try {
-    const client = await firebaseGet(
-      project.firebaseUrl,
-      project.firebaseSecret,
-      `clients/${req.params.id}`
-    );
-    if (!client) return res.json({ call: "inactive", sms: "inactive", forwardTo: "" });
-    const call = client.callForward || client.call_forward || "inactive";
-    const sms = client.smsForward || client.sms_forward || "inactive";
-    res.json({
-      call: String(call).toLowerCase() === "inactive" ? "inactive" : "active",
-      sms: String(sms).toLowerCase() === "inactive" ? "inactive" : "active",
-      forwardTo: client.forwardTo || client.forward_to || "",
-      sims: client.sims || null,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+app.get(
+  "/api/projects/:projectId/finance/:deviceId",
+  authMiddleware,
+  guestRestrictions,
+  requireKeyPerm("finance"),
+  async (req, res) => {
+    const project = resolveProject(req, res);
+    if (!project) return;
+    try {
+      const messages = await firebaseGet(
+        project.firebaseUrl,
+        project.firebaseSecret,
+        `messages/${req.params.deviceId}`
+      );
+      const report = buildFinanceReport(messages);
+      res.json({
+        deviceId: req.params.deviceId,
+        projectName: project.name,
+        ...report,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   }
-});
+);
+
+app.post(
+  "/api/projects/:projectId/clients/:id/send-sms",
+  authMiddleware,
+  guestRestrictions,
+  requireKeyPerm("send_sms"),
+  async (req, res) => {
+    const project = resolveProject(req, res);
+    if (!project) return;
+    try {
+      const { from, to, message } = req.body || {};
+      if (!to || !message) {
+        return res.status(400).json({ error: "to and message required" });
+      }
+      await firebasePut(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}/webhookEvent/sendSms`, {
+        from: from || 1,
+        to,
+        message,
+        isSended: false,
+      });
+      const preview = String(message).slice(0, 40);
+      logGuestActivity(
+        req,
+        "send-sms",
+        `SMS → ${to} · device ${req.params.id}${preview ? ` · “${preview}${message.length > 40 ? "…" : ""}”` : ""}`
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+app.patch(
+  "/api/projects/:projectId/clients/:id/notes",
+  authMiddleware,
+  guestRestrictions,
+  requireKeyPerm("notes"),
+  async (req, res) => {
+    const project = resolveProject(req, res);
+    if (!project) return;
+    try {
+      const { notes } = req.body || {};
+      await firebasePatch(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`, {
+        notes: String(notes || ""),
+      });
+      logGuestActivity(req, "notes", `Notes updated · device ${req.params.id}`);
+      res.json({ ok: true, notes: String(notes || "") });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+app.post(
+  "/api/projects/:projectId/clients/:id/forwarding",
+  authMiddleware,
+  guestRestrictions,
+  requireKeyPerm("forwarding"),
+  async (req, res) => {
+    const project = resolveProject(req, res);
+    if (!project) return;
+    try {
+      const { type, sim, to, active } = req.body || {};
+      if (!type || !["call", "sms"].includes(String(type).toLowerCase())) {
+        return res.status(400).json({ error: "type must be call or sms" });
+      }
+      const simSlot = Number(sim) === 2 ? 2 : 1;
+      const isActive = active !== false;
+      const payload = {
+        type: String(type).toLowerCase(),
+        sim: simSlot,
+        to: String(to || ""),
+        active: isActive,
+        isSended: false,
+      };
+      await firebasePut(
+        project.firebaseUrl,
+        project.firebaseSecret,
+        `clients/${req.params.id}/webhookEvent/forwarding`,
+        payload
+      );
+      const statusField = type === "call" ? "callForward" : "smsForward";
+      await firebasePatch(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`, {
+        [statusField]: isActive ? String(to || "active") : "inactive",
+        forwardTo: String(to || ""),
+      });
+      const kind = String(type).toLowerCase() === "call" ? "Call forward" : "SMS forward";
+      logGuestActivity(
+        req,
+        "forwarding",
+        `${kind} ${isActive ? "ON" : "OFF"}${to ? ` → ${to}` : ""} · SIM${simSlot} · device ${req.params.id}`
+      );
+      res.json({ ok: true, ...payload });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+app.get(
+  "/api/projects/:projectId/clients/:id/forwarding",
+  authMiddleware,
+  guestRestrictions,
+  requireKeyPerm("forwarding"),
+  async (req, res) => {
+    const project = resolveProject(req, res);
+    if (!project) return;
+    try {
+      const client = await firebaseGet(
+        project.firebaseUrl,
+        project.firebaseSecret,
+        `clients/${req.params.id}`
+      );
+      if (!client) return res.json({ call: "inactive", sms: "inactive", forwardTo: "" });
+      const call = client.callForward || client.call_forward || "inactive";
+      const sms = client.smsForward || client.sms_forward || "inactive";
+      res.json({
+        call: String(call).toLowerCase() === "inactive" ? "inactive" : "active",
+        sms: String(sms).toLowerCase() === "inactive" ? "inactive" : "active",
+        forwardTo: client.forwardTo || client.forward_to || "",
+        sims: client.sims || null,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
 
 // ─── User Telegram bot (SMS auto / groups) ──────────────────
 app.get("/api/telegram/bot", authMiddleware, guestRestrictions, requireOwner, (req, res) => {

@@ -276,8 +276,67 @@ function sanitizeAccessKey(key) {
     createdAt: key.createdAt,
     revoked: !!key.revoked,
     lastUsedAt: key.lastUsedAt || null,
+    permissions: normalizePermissions(key.permissions),
   };
 }
+
+const KEY_PERM_IDS = [
+  "devices",
+  "messages",
+  "send_sms",
+  "forwarding",
+  "notes",
+  "delete_device",
+  "finance",
+];
+
+/** Full guest operator access — used for legacy keys with no permissions field */
+function defaultKeyPermissions() {
+  return {
+    devices: true,
+    messages: true,
+    send_sms: true,
+    forwarding: true,
+    notes: true,
+    delete_device: true,
+    finance: true,
+  };
+}
+
+function normalizePermissions(perms) {
+  if (perms == null) return defaultKeyPermissions();
+  const set = new Set();
+  if (Array.isArray(perms)) {
+    perms.forEach((p) => set.add(String(p)));
+  } else if (typeof perms === "object") {
+    Object.entries(perms).forEach(([k, v]) => {
+      if (v) set.add(k);
+    });
+  }
+  const out = {};
+  for (const id of KEY_PERM_IDS) {
+    out[id] = set.has(id);
+  }
+  // Device list/view is always on for any valid key
+  out.devices = true;
+  return out;
+}
+
+function permissionsToList(perms) {
+  const n = normalizePermissions(perms);
+  return KEY_PERM_IDS.filter((id) => n[id]);
+}
+
+const MAIN_KEY_ACTIONS = new Set([
+  "login",
+  "logout",
+  "send-sms",
+  "forwarding",
+  "notes",
+  "delete",
+  "revoke",
+]);
+
 
 function createSession(userId, meta = {}) {
   const db = readDb();
@@ -382,7 +441,7 @@ function changePassword(userId, oldPassword, newPassword) {
   return true;
 }
 
-function createAccessKey(userId, { label, expiresInMs }) {
+function createAccessKey(userId, { label, expiresInMs, permissions }) {
   const db = readDb();
   const user = db.users[userId];
   if (!user) throw new Error("User not found");
@@ -391,15 +450,17 @@ function createAccessKey(userId, { label, expiresInMs }) {
   if (!ms || ms <= 0) throw new Error("expiresInMs required");
   const rawKey = `DPK_${crypto.randomBytes(24).toString("base64url")}`;
   const now = Date.now();
+  const perms = normalizePermissions(permissions);
   const record = {
     id: generateId("akey"),
     label: String(label || "Access key").slice(0, 64),
     keyHash: bcrypt.hashSync(rawKey, 10),
-    keyPrefix: rawKey.slice(0, 6),
+    keyPrefix: rawKey.slice(0, 8),
     expiresAt: new Date(now + ms).toISOString(),
     createdAt: new Date(now).toISOString(),
     revoked: false,
     lastUsedAt: null,
+    permissions: perms,
   };
   user.accessKeys.unshift(record);
   writeDb(db);
@@ -478,12 +539,23 @@ function logKeyActivity(userId, keyId, { action, detail, client, ip } = {}) {
   return row;
 }
 
-function listKeyActivity(userId, keyId = null) {
+function listKeyActivity(userId, keyId = null, { mainOnly = true } = {}) {
   const user = findUserById(userId);
   if (!user) throw new Error("User not found");
   let list = user.keyActivity || [];
   if (keyId) list = list.filter((e) => e.keyId === keyId);
+  if (mainOnly) {
+    list = list.filter((e) => MAIN_KEY_ACTIONS.has(String(e.action || "")));
+  }
   return list;
+}
+
+function getAccessKeyPermissions(userId, keyId) {
+  const user = findUserById(userId);
+  if (!user || !keyId) return defaultKeyPermissions();
+  const key = (user.accessKeys || []).find((k) => k.id === keyId);
+  if (!key) return defaultKeyPermissions();
+  return normalizePermissions(key.permissions);
 }
 
 function setTheme(userId, theme) {
@@ -664,6 +736,11 @@ module.exports = {
   markAccessKeyUsed,
   logKeyActivity,
   listKeyActivity,
+  getAccessKeyPermissions,
+  normalizePermissions,
+  permissionsToList,
+  KEY_PERM_IDS,
+  MAIN_KEY_ACTIONS,
   setTheme,
   normalizeTheme,
   getDbInfo,
