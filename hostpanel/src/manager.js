@@ -78,17 +78,29 @@ async function getStatus() {
 
   const apps = store.listApps().map((app) => {
     const proc = matchProc(processes, app);
+    const runningName = proc ? procName(proc) : null;
     return {
       ...app,
       webhookSecret: undefined,
       env: app.env || {},
       status: proc?.pm2_env?.status || "not_found",
+      runningPm2Name: runningName,
       memory: proc?.monit?.memory || 0,
       cpu: proc?.monit?.cpu || 0,
       restarts: proc?.pm2_env?.restart_time || 0,
       uptime: proc?.pm2_env?.pm_uptime || null,
       webhookUrl: webhookUrl(app),
       pathExists: fs.existsSync(app.path),
+      hasRequirements: fs.existsSync(path.join(app.path, "requirements.txt")),
+      hasPackageJson: fs.existsSync(path.join(app.path, "package.json")),
+      autoDeps:
+        app.type === "python"
+          ? fs.existsSync(path.join(app.path, "requirements.txt"))
+            ? "pip3 install -r requirements.txt (on deploy)"
+            : "No requirements.txt"
+          : fs.existsSync(path.join(app.path, "package.json"))
+            ? "npm install (on deploy)"
+            : "No package.json",
     };
   });
 
@@ -157,13 +169,21 @@ function extractZip(zipPath, destDir) {
 
 async function installDeps(app) {
   const steps = [];
-  if (app.type === "python" && fs.existsSync(path.join(app.path, "requirements.txt"))) {
-    const out = await run("pip3", ["install", "-r", "requirements.txt"], app.path, 180000);
-    steps.push({ cmd: "pip3 install -r requirements.txt", out: out.stdout.slice(-2500) });
+  if (app.type === "python") {
+    if (fs.existsSync(path.join(app.path, "requirements.txt"))) {
+      const out = await run("pip3", ["install", "-r", "requirements.txt"], app.path, 180000);
+      steps.push({ cmd: "pip3 install -r requirements.txt", out: out.stdout.slice(-2500) });
+    } else {
+      steps.push({ cmd: "pip3 (skip)", out: "requirements.txt not found — skipped" });
+    }
   }
-  if (app.type === "node" && fs.existsSync(path.join(app.path, "package.json"))) {
-    const out = await run("npm", ["install"], app.path, 180000);
-    steps.push({ cmd: "npm install", out: out.stdout.slice(-2500) });
+  if (app.type === "node") {
+    if (fs.existsSync(path.join(app.path, "package.json"))) {
+      const out = await run("npm", ["install"], app.path, 180000);
+      steps.push({ cmd: "npm install", out: out.stdout.slice(-2500) });
+    } else {
+      steps.push({ cmd: "npm (skip)", out: "package.json not found — skipped" });
+    }
   }
   return steps;
 }
@@ -200,20 +220,31 @@ async function pm2StartOrRestart(app) {
     }
   }
 
+  await pm2DeleteQuiet("ecosystem.hostpanel");
   await pm2DeleteQuiet(app.pm2Name);
   await pm2DeleteQuiet(app.id);
 
   try {
-    const out = await run("pm2", ["start", ecoPath, "--update-env"], app.path, 30000);
+    const out = await run(
+      "pm2",
+      ["start", ecoPath, "--only", pm2Name, "--update-env"],
+      app.path,
+      30000
+    );
     store.saveApp(app);
-    return { cmd: "pm2 start", out: out.stdout + out.stderr };
+    return { cmd: "pm2 start --only " + pm2Name, out: out.stdout + out.stderr };
   } catch (e) {
     const msg = String(e.message || "");
     if (msg.includes("already launched") || msg.includes("Already exists")) {
       await pm2DeleteQuiet(pm2Name);
-      const out = await run("pm2", ["start", ecoPath, "-f", "--update-env"], app.path, 30000);
+      const out = await run(
+        "pm2",
+        ["start", ecoPath, "--only", pm2Name, "-f", "--update-env"],
+        app.path,
+        30000
+      );
       store.saveApp(app);
-      return { cmd: "pm2 start -f", out: out.stdout + out.stderr };
+      return { cmd: "pm2 start -f --only " + pm2Name, out: out.stdout + out.stderr };
     }
     throw e;
   }

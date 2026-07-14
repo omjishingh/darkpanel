@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>HOST PANEL — Deploy Server</title>
-  <link rel="stylesheet" href="/app.css?v=1" />
+  <link rel="stylesheet" href="/app.css?v=2" />
 </head>
 <body>
 
@@ -58,7 +58,7 @@
 
         <div id="modeZip" class="card">
           <h3>Upload bot folder as ZIP</h3>
-          <p class="muted">Bot ka poora folder ZIP karo (main.py / index.js root me hona chahiye) — upload karo, auto extract + run.</p>
+          <p class="muted">ZIP upload → auto extract → <b>requirements.txt / package.json auto-install</b> → PM2 start.</p>
           <div class="form-grid">
             <div><label>App ID</label><input id="zipId" placeholder="mybot" /></div>
             <div><label>Display Name</label><input id="zipName" placeholder="My Telegram Bot" /></div>
@@ -75,7 +75,7 @@
 
         <div id="modeGit" class="card hidden">
           <h3>Deploy from GitHub</h3>
-          <p class="muted">Repo clone hoga — push pe auto-deploy webhook milega.</p>
+          <p class="muted">Git clone → <b>pip/npm auto</b> → PM2 start. Dashboard pe <b>Auto-deploy link</b> dikhega.</p>
           <div class="form-grid">
             <div><label>App ID</label><input id="gitId" placeholder="bot1" /></div>
             <div><label>Display Name</label><input id="gitName" placeholder="My Bot" /></div>
@@ -114,6 +114,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="/app.js?v=1"></script>
+  <script src="/app.js?v=2"></script>
 </body>
 </html>

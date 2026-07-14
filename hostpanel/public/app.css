@@ -91,6 +91,20 @@ input[type=file] { padding: 8px; }
 .app-meta { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 0.75rem; color: var(--muted); margin-bottom: 12px; }
 .app-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .app-actions button { pointer-events: auto; }
+.deps-pill {
+  font-size: 0.72rem; color: var(--accent); background: #0d2828;
+  border: 1px solid #1a4040; border-radius: 8px; padding: 6px 10px; margin-bottom: 10px;
+}
+.wh-block { margin: 10px 0 12px; }
+.wh-block label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; display: block; }
+.wh-row { display: flex; gap: 6px; }
+.wh-input {
+  flex: 1; font-size: 0.68rem; padding: 7px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--muted);
+}
+.hint { font-size: 0.68rem; color: var(--muted); margin-top: 4px; }
+.btn-accent-sm { background: var(--accent); color: #041210; border: none; }
+.step-list { margin: 6px 0 0 16px; font-size: 0.75rem; color: var(--muted); }
 
 .card {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);

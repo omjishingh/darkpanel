@@ -15,7 +15,7 @@
     el.textContent = msg;
     el.className = "toast " + (err ? "err" : "ok");
     show(el, true);
-    setTimeout(() => show(el, false), 3000);
+    setTimeout(() => show(el, false), 4000);
   }
 
   function esc(s) {
@@ -29,6 +29,15 @@
     if (n < 1024) return n + " B";
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
     return (n / 1048576).toFixed(1) + " MB";
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Copied!");
+    } catch (_) {
+      toast("Copy failed", true);
+    }
   }
 
   async function api(path, opts = {}) {
@@ -91,6 +100,11 @@
     return "stopped";
   }
 
+  function formatDeploySteps(steps) {
+    if (!steps || !steps.length) return "";
+    return steps.map((s) => "$ " + s.cmd + "\n" + (s.out || "")).join("\n\n");
+  }
+
   function renderApps(data) {
     const grid = $("appsGrid");
     const apps = data?.apps || [];
@@ -99,26 +113,38 @@
       return;
     }
     grid.innerHTML = apps
-      .map(
-        (a) =>
-          `<div class="app-card" data-id="${esc(a.id)}">
+      .map((a) => {
+        const whBlock =
+          a.source === "git" && a.webhookUrl
+            ? `<div class="wh-block">
+            <label>Auto-deploy link (GitHub webhook)</label>
+            <div class="wh-row">
+              <input type="text" readonly class="wh-input" value="${esc(a.webhookUrl)}" />
+              <button type="button" class="btn-sm copy-wh" data-url="${esc(a.webhookUrl)}">Copy</button>
+            </div>
+            <p class="hint">GitHub → Settings → Webhooks → paste URL → Push events</p>
+          </div>`
+            : "";
+        return `<div class="app-card" data-id="${esc(a.id)}">
         <div class="app-card-head">
           <div><h3>${esc(a.name)}</h3><p class="muted">${esc(a.id)} · ${esc(a.type)} · ${esc(a.source)}</p></div>
           <span class="badge ${badgeClass(a.status)}">${esc(a.status)}</span>
         </div>
         <div class="app-meta">
+          <span>PM2: <b>${esc(a.runningPm2Name || a.pm2Name || a.id)}</b></span>
           <span>RAM ${esc(fmtBytes(a.memory))}</span>
-          <span>Restarts ${esc(a.restarts || 0)}</span>
           <span>${esc(a.startScript)}</span>
         </div>
+        <div class="deps-pill">${esc(a.autoDeps || "—")}</div>
+        ${whBlock}
         <div class="app-actions">
           <button class="btn-sm" data-act="open" data-id="${esc(a.id)}">Console</button>
-          <button class="btn-sm" data-act="deploy" data-id="${esc(a.id)}">Deploy</button>
+          <button class="btn-sm btn-accent-sm" data-act="deploy" data-id="${esc(a.id)}">Deploy</button>
           <button class="btn-sm" data-act="restart" data-id="${esc(a.id)}">Restart</button>
           <button class="btn-sm danger" data-act="stop" data-id="${esc(a.id)}">Stop</button>
         </div>
-      </div>`
-      )
+      </div>`;
+      })
       .join("");
 
     grid.querySelectorAll("[data-act]").forEach((btn) => {
@@ -132,7 +158,12 @@
         else if (act === "stop") runAction(id, "stop");
       };
     });
-
+    grid.querySelectorAll(".copy-wh").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        copyText(btn.dataset.url || "");
+      };
+    });
     grid.querySelectorAll(".app-card").forEach((card) => {
       card.onclick = () => openConsole(card.dataset.id);
     });
@@ -146,13 +177,16 @@
       return;
     }
     el.innerHTML = logs
-      .map(
-        (l) =>
-          `<div class="deploy-row ${l.ok ? "ok" : "fail"}">
+      .map((l) => {
+        const steps = (l.steps || [])
+          .map((s) => `<li><b>${esc(s.cmd)}</b></li>`)
+          .join("");
+        return `<div class="deploy-row ${l.ok ? "ok" : "fail"}">
         <div><b>${esc(l.appName || l.appId)}</b> · ${esc(l.trigger || "manual")}</div>
         <div class="sub">${esc(new Date(l.at).toLocaleString())}${l.error ? " · " + esc(l.error) : " · success"}</div>
-      </div>`
-      )
+        ${steps ? `<ul class="step-list">${steps}</ul>` : ""}
+      </div>`;
+      })
       .join("");
   }
 
@@ -160,7 +194,9 @@
     try {
       cache = await api("/api/apps");
       $("serverInfo").textContent =
-        (cache.apps?.length || 0) + " apps · " + (cache.appsRoot || "") + " · " + (cache.publicUrl || "");
+        (cache.apps?.length || 0) +
+        " apps · Auto: requirements.txt → pip, package.json → npm · " +
+        (cache.publicUrl || "");
       renderApps(cache);
       renderHistory();
     } catch (e) {
@@ -169,13 +205,30 @@
     }
   }
 
+  function showDeployResult(id, log) {
+    const app = (cache?.apps || []).find((a) => a.id === id);
+    const header = [
+      "=== DEPLOY " + (log.ok ? "OK" : "FAILED") + " ===",
+      app?.webhookUrl ? "Webhook: " + app.webhookUrl : "",
+      "",
+      formatDeploySteps(log.steps),
+      log.error ? "\nERROR: " + log.error : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    $("consoleBody").textContent = header;
+    show("consoleDrawer", true);
+    $("consoleTitle").textContent = (app?.name || id) + " — Deploy output";
+    consoleAppId = id;
+  }
+
   async function runDeploy(id) {
-    toast("Deploying " + id + "…");
+    toast("Deploying " + id + " — deps install + PM2 start…");
     try {
-      await api("/api/apps/" + id + "/deploy", { method: "POST" });
-      toast("Deployed " + id);
+      const data = await api("/api/apps/" + id + "/deploy", { method: "POST" });
+      showDeployResult(id, data.log || {});
+      toast(data.log?.ok ? "Deployed " + id : "Deploy failed", !data.log?.ok);
       await loadDashboard();
-      if (consoleAppId === id) await refreshConsoleLogs();
     } catch (e) {
       toast(e.message, true);
     }
@@ -196,23 +249,23 @@
     const app = (cache?.apps || []).find((a) => a.id === id);
     $("consoleTitle").textContent = (app?.name || id) + " — Console";
     show("consoleDrawer", true);
-    await refreshConsoleLogs();
-    if (app?.webhookUrl) {
-      $("consoleBody").textContent =
-        "Webhook (GitHub auto-deploy):\n" + app.webhookUrl + "\n\n" + ($("consoleBody").textContent || "");
+    const lines = [
+      app?.webhookUrl ? "Auto-deploy webhook:\n" + app.webhookUrl : "",
+      app?.autoDeps ? "Auto deps: " + app.autoDeps : "",
+      "",
+      "--- LOGS ---",
+    ];
+    try {
+      const data = await api("/api/apps/" + id + "/logs?lines=150");
+      $("consoleBody").textContent = lines.filter(Boolean).join("\n") + "\n" + (data.text || "No logs");
+    } catch (e) {
+      $("consoleBody").textContent = lines.join("\n") + "\nError: " + e.message;
     }
   }
 
   async function refreshConsoleLogs() {
     if (!consoleAppId) return;
-    try {
-      const data = await api("/api/apps/" + consoleAppId + "/logs?lines=150");
-      const app = (cache?.apps || []).find((a) => a.id === consoleAppId);
-      const header = app?.webhookUrl ? "Webhook:\n" + app.webhookUrl + "\n\n--- LOGS ---\n" : "";
-      $("consoleBody").textContent = header + (data.text || "No logs");
-    } catch (e) {
-      $("consoleBody").textContent = "Error: " + e.message;
-    }
+    await openConsole(consoleAppId);
   }
 
   async function uploadZip() {
@@ -224,12 +277,13 @@
     fd.append("name", $("zipName").value.trim());
     fd.append("startScript", $("zipStart").value.trim());
     fd.append("type", $("zipType").value);
-    $("zipStatus").textContent = "Uploading…";
+    $("zipStatus").textContent = "Upload → extract → pip/npm install → PM2 start…";
     $("btnUploadZip").disabled = true;
     try {
       const data = await api("/api/apps/upload", { method: "POST", body: fd });
-      $("zipStatus").textContent = "Deployed: " + (data.app?.name || "OK");
-      toast("ZIP uploaded & running");
+      $("zipStatus").textContent = "Done: " + (data.app?.name || "OK");
+      if (data.log) showDeployResult(data.app?.id || $("zipId").value.trim(), data.log);
+      toast("ZIP deployed — requirements auto-installed");
       $("zipFile").value = "";
       switchTab("dashboard");
       await loadDashboard();
@@ -253,8 +307,9 @@
     };
     try {
       const created = await api("/api/apps", { method: "POST", body: JSON.stringify(payload) });
-      await api("/api/apps/" + created.app.id + "/deploy", { method: "POST" });
-      toast("Git app deployed");
+      const dep = await api("/api/apps/" + created.app.id + "/deploy", { method: "POST" });
+      if (dep.log) showDeployResult(created.app.id, dep.log);
+      toast("Git deployed — webhook card me copy karo");
       switchTab("dashboard");
       await loadDashboard();
     } catch (e) {
