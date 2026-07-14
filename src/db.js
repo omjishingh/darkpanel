@@ -106,6 +106,10 @@ function createUser({ username, password, twoFactorEnabled = false, telegramChat
     telegramChatId: telegramChatId || null,
     createdAt: new Date().toISOString(),
     firebaseProjects: [],
+    sessions: [],
+    accessKeys: [],
+    keyActivity: [],
+    theme: { preset: "dark" },
   };
   db.users[id] = user;
   writeDb(db);
@@ -226,6 +230,29 @@ function verifyUserPassword(username, password) {
   return user;
 }
 
+const THEME_PRESETS = new Set(["purple", "blue", "green", "rose", "dark"]);
+
+function normalizeTheme(theme) {
+  if (!theme || typeof theme !== "object") return { preset: "purple" };
+  const out = {};
+  if (theme.preset && THEME_PRESETS.has(String(theme.preset))) {
+    out.preset = String(theme.preset);
+  } else {
+    out.preset = "purple";
+  }
+  if (theme.primary && /^#[0-9A-Fa-f]{6}$/.test(String(theme.primary).trim())) {
+    out.primary = String(theme.primary).trim();
+  }
+  return out;
+}
+
+function ensureSecurityArrays(user) {
+  if (!Array.isArray(user.sessions)) user.sessions = [];
+  if (!Array.isArray(user.accessKeys)) user.accessKeys = [];
+  if (!Array.isArray(user.keyActivity)) user.keyActivity = [];
+  if (!user.theme) user.theme = { preset: "purple" };
+}
+
 function sanitizeUser(user) {
   return {
     id: user.id,
@@ -236,7 +263,255 @@ function sanitizeUser(user) {
     telegramUserConnected: !!(user.telegramUserClient && user.telegramUserClient.session),
     createdAt: user.createdAt,
     firebaseCount: (user.firebaseProjects || []).length,
+    theme: normalizeTheme(user.theme),
   };
+}
+
+function sanitizeAccessKey(key) {
+  return {
+    id: key.id,
+    label: key.label,
+    keyPrefix: key.keyPrefix,
+    expiresAt: key.expiresAt,
+    createdAt: key.createdAt,
+    revoked: !!key.revoked,
+    lastUsedAt: key.lastUsedAt || null,
+  };
+}
+
+function createSession(userId, meta = {}) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  ensureSecurityArrays(user);
+  const now = new Date().toISOString();
+  const session = {
+    id: generateId("sess"),
+    client: String(meta.client || "unknown").slice(0, 64),
+    ip: meta.ip ? String(meta.ip).slice(0, 64) : null,
+    userAgent: meta.userAgent ? String(meta.userAgent).slice(0, 256) : null,
+    createdAt: now,
+    lastSeenAt: now,
+    label: meta.label ? String(meta.label).slice(0, 128) : null,
+    revoked: false,
+    keyId: meta.keyId || null,
+  };
+  user.sessions.unshift(session);
+  user.sessions = user.sessions.slice(0, 50);
+  writeDb(db);
+  return { ...session };
+}
+
+function touchSession(userId, sid) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) return null;
+  ensureSecurityArrays(user);
+  const session = user.sessions.find((s) => s.id === sid);
+  if (!session || session.revoked) return null;
+  session.lastSeenAt = new Date().toISOString();
+  writeDb(db);
+  return { ...session };
+}
+
+function getSession(userId, sid) {
+  const user = findUserById(userId);
+  if (!user) return null;
+  const sessions = user.sessions || [];
+  const session = sessions.find((s) => s.id === sid);
+  return session ? { ...session } : null;
+}
+
+function listSessions(userId) {
+  const user = findUserById(userId);
+  if (!user) throw new Error("User not found");
+  return (user.sessions || [])
+    .filter((s) => !s.revoked)
+    .map((s) => ({
+      id: s.id,
+      client: s.client,
+      ip: s.ip,
+      userAgent: s.userAgent,
+      createdAt: s.createdAt,
+      lastSeenAt: s.lastSeenAt,
+      label: s.label,
+      keyId: s.keyId || null,
+    }));
+}
+
+function revokeSession(userId, sid) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  ensureSecurityArrays(user);
+  const session = user.sessions.find((s) => s.id === sid);
+  if (!session) throw new Error("Session not found");
+  session.revoked = true;
+  writeDb(db);
+  return true;
+}
+
+function revokeAllSessions(userId, exceptSid = null) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  ensureSecurityArrays(user);
+  let count = 0;
+  for (const session of user.sessions) {
+    if (exceptSid && session.id === exceptSid) continue;
+    if (!session.revoked) {
+      session.revoked = true;
+      count += 1;
+    }
+  }
+  writeDb(db);
+  return count;
+}
+
+function changePassword(userId, oldPassword, newPassword) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  if (!bcrypt.compareSync(String(oldPassword || ""), user.passwordHash)) {
+    throw new Error("Current password is incorrect");
+  }
+  const next = String(newPassword || "");
+  if (next.length < 6) throw new Error("New password must be at least 6 characters");
+  user.passwordHash = bcrypt.hashSync(next, 10);
+  writeDb(db);
+  return true;
+}
+
+function createAccessKey(userId, { label, expiresInMs }) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  ensureSecurityArrays(user);
+  const ms = Number(expiresInMs);
+  if (!ms || ms <= 0) throw new Error("expiresInMs required");
+  const rawKey = `DPK_${crypto.randomBytes(24).toString("base64url")}`;
+  const now = Date.now();
+  const record = {
+    id: generateId("akey"),
+    label: String(label || "Access key").slice(0, 64),
+    keyHash: bcrypt.hashSync(rawKey, 10),
+    keyPrefix: rawKey.slice(0, 6),
+    expiresAt: new Date(now + ms).toISOString(),
+    createdAt: new Date(now).toISOString(),
+    revoked: false,
+    lastUsedAt: null,
+  };
+  user.accessKeys.unshift(record);
+  writeDb(db);
+  return { key: rawKey, record: sanitizeAccessKey(record) };
+}
+
+function findAccessKeyByRaw(rawKey) {
+  const key = String(rawKey || "").trim();
+  if (!key.startsWith("DPK_")) return null;
+  const db = readDb();
+  for (const [id, user] of Object.entries(db.users || {})) {
+    const keys = user.accessKeys || [];
+    for (const accessKey of keys) {
+      if (accessKey.revoked) continue;
+      if (accessKey.keyPrefix && !key.startsWith(accessKey.keyPrefix)) continue;
+      if (!bcrypt.compareSync(key, accessKey.keyHash)) continue;
+      if (accessKey.expiresAt && new Date(accessKey.expiresAt).getTime() < Date.now()) {
+        continue;
+      }
+      return { user: { id, ...user }, key: { ...accessKey } };
+    }
+  }
+  return null;
+}
+
+function revokeAccessKey(userId, keyId) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  ensureSecurityArrays(user);
+  const key = user.accessKeys.find((k) => k.id === keyId);
+  if (!key) throw new Error("Access key not found");
+  key.revoked = true;
+  for (const session of user.sessions) {
+    if (session.keyId === keyId && !session.revoked) {
+      session.revoked = true;
+    }
+  }
+  writeDb(db);
+  return sanitizeAccessKey(key);
+}
+
+function listAccessKeys(userId) {
+  const user = findUserById(userId);
+  if (!user) throw new Error("User not found");
+  return (user.accessKeys || []).map(sanitizeAccessKey);
+}
+
+function markAccessKeyUsed(userId, keyId) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) return;
+  ensureSecurityArrays(user);
+  const key = user.accessKeys.find((k) => k.id === keyId);
+  if (!key) return;
+  key.lastUsedAt = new Date().toISOString();
+  writeDb(db);
+}
+
+function logKeyActivity(userId, keyId, { action, detail, client, ip } = {}) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) return null;
+  ensureSecurityArrays(user);
+  const row = {
+    id: generateId("kact"),
+    keyId: keyId || null,
+    at: new Date().toISOString(),
+    action: String(action || "unknown").slice(0, 64),
+    detail: detail != null ? String(detail).slice(0, 256) : null,
+    client: client ? String(client).slice(0, 64) : null,
+    ip: ip ? String(ip).slice(0, 64) : null,
+  };
+  user.keyActivity = [row, ...(user.keyActivity || [])].slice(0, 100);
+  writeDb(db);
+  return row;
+}
+
+function listKeyActivity(userId, keyId = null) {
+  const user = findUserById(userId);
+  if (!user) throw new Error("User not found");
+  let list = user.keyActivity || [];
+  if (keyId) list = list.filter((e) => e.keyId === keyId);
+  return list;
+}
+
+function setTheme(userId, theme) {
+  const db = readDb();
+  const user = db.users[userId];
+  if (!user) throw new Error("User not found");
+  ensureSecurityArrays(user);
+  const current = normalizeTheme(user.theme);
+  const next = { ...current };
+  if (theme && theme.preset !== undefined) {
+    const preset = String(theme.preset);
+    if (!THEME_PRESETS.has(preset)) {
+      throw new Error("Invalid theme preset");
+    }
+    next.preset = preset;
+    delete next.primary;
+  }
+  if (theme && theme.primary !== undefined) {
+    const primary = String(theme.primary || "").trim();
+    if (primary && !/^#[0-9A-Fa-f]{6}$/.test(primary)) {
+      throw new Error("primary must be a hex color like #RRGGBB");
+    }
+    if (primary) next.primary = primary;
+    else delete next.primary;
+  }
+  user.theme = next;
+  writeDb(db);
+  return normalizeTheme(user.theme);
 }
 
 function sanitizeFirebaseProjectForApp(project) {
@@ -375,6 +650,22 @@ module.exports = {
   clearTelegramUserClient,
   pushAutoSendEvent,
   listAutoSendEvents,
+  createSession,
+  touchSession,
+  getSession,
+  listSessions,
+  revokeSession,
+  revokeAllSessions,
+  changePassword,
+  createAccessKey,
+  findAccessKeyByRaw,
+  revokeAccessKey,
+  listAccessKeys,
+  markAccessKeyUsed,
+  logKeyActivity,
+  listKeyActivity,
+  setTheme,
+  normalizeTheme,
   getDbInfo,
   exportDb,
   importDb,

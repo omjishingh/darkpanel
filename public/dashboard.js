@@ -2,7 +2,9 @@
   const API = window.location.origin;
   let token = localStorage.getItem("dp_token") || "";
   let sessionId = "";
+  let authSessionId = localStorage.getItem("dp_sid") || "";
   let currentUser = "";
+  let userScope = localStorage.getItem("dp_scope") || "owner";
   let projects = [];
   let activeProjectId = localStorage.getItem("dp_project") || "";
   let devices = [];
@@ -11,9 +13,56 @@
   let currentView = "overview";
   let deviceFilter = "all";
   let favorites = JSON.parse(localStorage.getItem("dp_favs") || "[]");
+  let currentTheme = { preset: "purple" };
+  let accessKeysCache = [];
+
+  function isGuest() {
+    return userScope === "guest";
+  }
 
   function saveFavs() {
     localStorage.setItem("dp_favs", JSON.stringify(favorites));
+  }
+
+  function applyTheme(theme) {
+    currentTheme = theme && typeof theme === "object" ? theme : { preset: "purple" };
+    const preset = currentTheme.preset || "purple";
+    document.documentElement.setAttribute("data-theme", preset);
+    if (currentTheme.primary) {
+      document.documentElement.style.setProperty("--primary", currentTheme.primary);
+      document.documentElement.style.setProperty("--cyan", currentTheme.primary);
+      document.documentElement.style.setProperty("--cyan-dim", currentTheme.primary);
+    } else {
+      document.documentElement.style.removeProperty("--primary");
+      document.documentElement.style.removeProperty("--cyan");
+      document.documentElement.style.removeProperty("--cyan-dim");
+    }
+    document.querySelectorAll(".theme-swatch").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.preset === preset && !currentTheme.primary);
+    });
+    if ($("themePrimary") && currentTheme.primary) {
+      $("themePrimary").value = currentTheme.primary;
+    }
+  }
+
+  function applyScopeUi() {
+    document.querySelectorAll(".owner-only").forEach((el) => {
+      el.classList.toggle("hidden-guest", isGuest());
+    });
+    let banner = document.getElementById("guestBanner");
+    if (isGuest()) {
+      if (!banner) {
+        banner = document.createElement("div");
+        banner.id = "guestBanner";
+        banner.className = "guest-banner";
+        const main = document.querySelector(".main");
+        if (main) main.insertBefore(banner, main.firstChild);
+      }
+      banner.textContent = "Guest access (temporary key) — Devices & SMS only. Firebase / Security / Themes hidden.";
+      banner.classList.remove("hidden");
+    } else if (banner) {
+      banner.classList.add("hidden");
+    }
   }
 
   function isFav(id) {
@@ -238,19 +287,60 @@
         document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
         t.classList.add("active");
         show("loginPanel", t.dataset.tab === "login");
+        show("keyLoginPanel", t.dataset.tab === "key");
         show("registerPanel", t.dataset.tab === "register");
         setErr("loginErr", "");
+        setErr("keyLoginErr", "");
         setErr("regErr", "");
       };
     });
 
     $("btnLogin").onclick = doLogin;
+    $("btnKeyLogin").onclick = doKeyLogin;
     $("btn2fa").onclick = do2fa;
     $("btnRegister").onclick = doRegister;
     $("btnLogout").onclick = logout;
+    initSecurityUi();
+    initThemesUi();
 
     if (token) {
-      api("/api/auth/me").then((d) => enterApp(d.username)).catch(logout);
+      api("/api/auth/me")
+        .then((d) => {
+          userScope = d.scope || "owner";
+          localStorage.setItem("dp_scope", userScope);
+          if (d.theme) applyTheme(d.theme);
+          enterApp(d.username, d);
+        })
+        .catch(logout);
+    }
+  }
+
+  function persistAuth(data) {
+    token = data.token;
+    authSessionId = data.sessionId || "";
+    userScope = data.scope || "owner";
+    localStorage.setItem("dp_token", token);
+    localStorage.setItem("dp_scope", userScope);
+    if (authSessionId) localStorage.setItem("dp_sid", authSessionId);
+    else localStorage.removeItem("dp_sid");
+  }
+
+  async function doKeyLogin() {
+    setErr("keyLoginErr", "");
+    const key = ($("loginKey")?.value || "").trim();
+    if (!key) return setErr("keyLoginErr", "Access key daalo");
+    $("btnKeyLogin").disabled = true;
+    try {
+      const data = await api("/api/auth/login-key", {
+        method: "POST",
+        body: JSON.stringify({ key, client: "web" }),
+      });
+      persistAuth(data);
+      enterApp(data.username, data);
+    } catch (e) {
+      setErr("keyLoginErr", e.message);
+    } finally {
+      $("btnKeyLogin").disabled = false;
     }
   }
 
@@ -274,9 +364,8 @@
         show("loginPanel", false);
         show("twofaPanel", true);
       } else {
-        token = data.token;
-        localStorage.setItem("dp_token", token);
-        enterApp(data.username);
+        persistAuth({ ...data, scope: "owner" });
+        enterApp(data.username, data);
       }
     } catch (e) {
       setErr("loginErr", e.message);
@@ -291,10 +380,9 @@
     if (!code) return setErr("twofaErr", "Code daalo");
     try {
       const data = await api("/api/auth/verify-2fa", { method: "POST", body: JSON.stringify({ sessionId, code }) });
-      token = data.token;
-      localStorage.setItem("dp_token", token);
+      persistAuth({ ...data, scope: "owner" });
       show("twofaPanel", false);
-      enterApp(data.username);
+      enterApp(data.username, data);
     } catch (e) {
       setErr("twofaErr", e.message);
     }
@@ -331,35 +419,60 @@
     }
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      if (token) await api("/api/auth/logout", { method: "POST", body: "{}" });
+    } catch (_) {}
     token = "";
     activeProjectId = "";
+    userScope = "owner";
+    authSessionId = "";
     localStorage.removeItem("dp_token");
     localStorage.removeItem("dp_project");
+    localStorage.removeItem("dp_scope");
+    localStorage.removeItem("dp_sid");
     stopRefresh();
+    applyTheme({ preset: "purple" });
     show("appView", false);
     show("authView", true);
     show("loginPanel", true);
+    show("keyLoginPanel", false);
     show("registerPanel", false);
     show("twofaPanel", false);
   }
 
   // ─── App ────────────────────────────────────────────────
-  async function enterApp(username) {
+  async function enterApp(username, me) {
     currentUser = username;
+    if (me?.scope) {
+      userScope = me.scope;
+      localStorage.setItem("dp_scope", userScope);
+    }
+    if (me?.theme) applyTheme(me.theme);
+    if (me?.sessionId) {
+      authSessionId = me.sessionId;
+      localStorage.setItem("dp_sid", authSessionId);
+    }
     show("authView", false);
     show("appView", true);
-    $("sidebarUser").innerHTML = "Logged in as <b>" + esc(username) + "</b>";
-    if ($("mobileUser")) $("mobileUser").textContent = username || "";
+    const guestTag = isGuest() ? " · Guest key" : "";
+    $("sidebarUser").innerHTML = "Logged in as <b>" + esc(username) + "</b>" + esc(guestTag);
+    if ($("mobileUser")) $("mobileUser").textContent = (username || "") + (isGuest() ? " (key)" : "");
+    applyScopeUi();
     await loadProjects();
     initNav();
     setupMobileNav();
     if (activeProjectId && projects.find((p) => p.id === activeProjectId)) {
-      switchView("overview");
+      switchView(isGuest() ? "devices" : "overview");
       loadDevices();
       startRefresh();
     } else if (projects.length === 1) {
       selectProject(projects[0].id);
+    } else if (projects.length > 0 && isGuest()) {
+      selectProject(projects[0].id);
+    } else if (isGuest()) {
+      switchView("devices");
+      toast("Koi Firebase project linked nahi — owner se poocho", true);
     } else {
       switchView("projects");
     }
@@ -369,7 +482,15 @@
     document.querySelectorAll(".nav-item[data-view]").forEach((el) => {
       el.onclick = () => {
         const v = el.dataset.view;
+        if (isGuest() && (v === "projects" || v === "telegram" || v === "security" || v === "themes")) {
+          toast("Guest key se yeh page allowed nahi", true);
+          return;
+        }
         if ((v === "devices" || v === "overview" || v === "favorites") && !activeProjectId) {
+          if (isGuest()) {
+            toast("Koi project available nahi", true);
+            return;
+          }
           toast("Pehle Firebase project select karo", true);
           switchView("projects");
           return;
@@ -379,11 +500,14 @@
         if (v === "overview" || v === "devices") loadDevices(true);
         if (v === "favorites") renderFavorites();
         if (v === "telegram") loadTelegramBot();
+        if (v === "security") loadSecurityPage();
+        if (v === "themes") syncThemeSwatches();
       };
     });
     $("btnRefresh").onclick = () => {
       if (currentView === "devices" || currentView === "overview") loadDevices();
       else if (currentView === "detail" && activeDevice) openDevice(activeDevice.id);
+      else if (currentView === "security") loadSecurityPage();
     };
     if ($("btnRefreshOverview")) {
       $("btnRefreshOverview").onclick = () => loadDevices();
@@ -401,6 +525,9 @@
   }
 
   function switchView(view) {
+    if (isGuest() && (view === "projects" || view === "telegram" || view === "security" || view === "themes")) {
+      view = "devices";
+    }
     currentView = view;
     document.querySelectorAll(".nav-item[data-view]").forEach((el) => {
       el.classList.toggle("active", el.dataset.view === view);
@@ -410,10 +537,284 @@
     show("viewFavorites", view === "favorites");
     show("viewProjects", view === "projects");
     show("viewTelegram", view === "telegram");
+    show("viewSecurity", view === "security");
+    show("viewThemes", view === "themes");
     show("viewDetail", view === "detail");
     if (view === "projects") loadProjects(true);
     if (view === "favorites") renderFavorites();
     if (view === "telegram") loadTelegramBot();
+    if (view === "security") loadSecurityPage();
+    if (view === "themes") syncThemeSwatches();
+  }
+
+  function syncThemeSwatches() {
+    document.querySelectorAll(".theme-swatch").forEach((btn) => {
+      btn.classList.toggle(
+        "active",
+        btn.dataset.preset === (currentTheme.preset || "purple") && !currentTheme.primary
+      );
+    });
+  }
+
+  function initThemesUi() {
+    document.querySelectorAll(".theme-swatch").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          const data = await api("/api/auth/theme", {
+            method: "PATCH",
+            body: JSON.stringify({ preset: btn.dataset.preset, primary: null }),
+          });
+          applyTheme(data.theme || { preset: btn.dataset.preset });
+          toast("Theme updated");
+        } catch (e) {
+          toast(e.message, true);
+        }
+      };
+    });
+    $("btnSaveThemeCustom")?.addEventListener("click", async () => {
+      const primary = $("themePrimary")?.value;
+      try {
+        const data = await api("/api/auth/theme", {
+          method: "PATCH",
+          body: JSON.stringify({ primary, preset: currentTheme.preset || "purple" }),
+        });
+        applyTheme(data.theme || { preset: currentTheme.preset, primary });
+        toast("Custom color applied");
+      } catch (e) {
+        toast(e.message, true);
+      }
+    });
+  }
+
+  function initSecurityUi() {
+    $("btnChangePassword")?.addEventListener("click", changePassword);
+    $("btnSaveSec2fa")?.addEventListener("click", saveSec2fa);
+    $("btnRefreshSessions")?.addEventListener("click", loadSessions);
+    $("btnRevokeOtherSessions")?.addEventListener("click", () => revokeSessions(false));
+    $("btnRevokeAllSessions")?.addEventListener("click", () => {
+      if (confirm("Har device se logout? Yeh session bhi band ho jayegi.")) revokeSessions(true);
+    });
+    $("btnCreateKey")?.addEventListener("click", createAccessKey);
+    $("btnCopyKey")?.addEventListener("click", () => {
+      const v = $("keyCreatedValue")?.textContent || "";
+      if (!v) return;
+      navigator.clipboard?.writeText(v).then(() => toast("Copied")).catch(() => toast("Copy manually", true));
+    });
+    $("activityKeySelect")?.addEventListener("change", (e) => loadKeyActivity(e.target.value));
+  }
+
+  async function loadSecurityPage() {
+    if (isGuest()) return;
+    try {
+      const me = await api("/api/auth/me");
+      if ($("sec2faChatId")) $("sec2faChatId").value = me.telegramChatId || "";
+      if ($("sec2faEnabled")) $("sec2faEnabled").checked = !!me.twoFactorEnabled;
+      if ($("sec2faGlobalNote")) show("sec2faGlobalNote", !!me.global2FA);
+    } catch (_) {}
+    await Promise.all([loadSessions(), loadAccessKeys()]);
+  }
+
+  async function changePassword() {
+    setErr("pwdErr", "");
+    show("pwdOk", false);
+    const oldPassword = $("pwdOld")?.value || "";
+    const newPassword = $("pwdNew")?.value || "";
+    const new2 = $("pwdNew2")?.value || "";
+    if (!oldPassword || !newPassword) return setErr("pwdErr", "Dono password daalo");
+    if (newPassword !== new2) return setErr("pwdErr", "New password match nahi karta");
+    if (newPassword.length < 6) return setErr("pwdErr", "New password kam se kam 6 chars");
+    try {
+      await api("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ oldPassword, newPassword }),
+      });
+      $("pwdOld").value = "";
+      $("pwdNew").value = "";
+      $("pwdNew2").value = "";
+      $("pwdOk").textContent = "Password updated. Other sessions logged out.";
+      show("pwdOk", true);
+      toast("Password changed");
+      loadSessions();
+    } catch (e) {
+      setErr("pwdErr", e.message);
+    }
+  }
+
+  async function saveSec2fa() {
+    try {
+      await api("/api/auth/me", {
+        method: "PATCH",
+        body: JSON.stringify({
+          twoFactorEnabled: !!$("sec2faEnabled")?.checked,
+          telegramChatId: ($("sec2faChatId")?.value || "").trim(),
+        }),
+      });
+      toast("2FA settings saved");
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  async function loadSessions() {
+    if (!$("sessionList")) return;
+    try {
+      const data = await api("/api/security/sessions");
+      const sessions = (data.sessions || []).filter((s) => !s.revoked);
+      if (!sessions.length) {
+        $("sessionList").innerHTML = '<div class="empty">No active sessions</div>';
+        return;
+      }
+      $("sessionList").innerHTML = sessions
+        .map((s) => {
+          const isCurrent = authSessionId && s.id === authSessionId;
+          return `<div class="session-row">
+            <div>
+              <div><b>${esc(s.label || s.client || "Session")}</b>${isCurrent ? '<span class="current-badge">This device</span>' : ""}</div>
+              <div class="session-meta">
+                ${esc(s.client || "—")} · IP ${esc(s.ip || "—")}<br/>
+                Started ${esc(fmtDate(parseTs(s.createdAt) || Date.parse(s.createdAt)))}<br/>
+                Last seen ${esc(fmtDate(parseTs(s.lastSeenAt) || Date.parse(s.lastSeenAt)))}
+              </div>
+            </div>
+            <button class="btn btn-sm btn-danger" data-revoke-sid="${esc(s.id)}" ${isCurrent ? "disabled" : ""}>Revoke</button>
+          </div>`;
+        })
+        .join("");
+      $("sessionList").querySelectorAll("[data-revoke-sid]").forEach((btn) => {
+        btn.onclick = async () => {
+          try {
+            await api("/api/security/sessions/" + encodeURIComponent(btn.dataset.revokeSid), { method: "DELETE" });
+            toast("Session revoked");
+            loadSessions();
+          } catch (e) {
+            toast(e.message, true);
+          }
+        };
+      });
+    } catch (e) {
+      $("sessionList").innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
+  }
+
+  async function revokeSessions(all) {
+    try {
+      await api("/api/security/sessions" + (all ? "?all=1" : ""), { method: "DELETE" });
+      if (all) {
+        toast("Logged out everywhere");
+        logout();
+        return;
+      }
+      toast("Other sessions logged out");
+      loadSessions();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  async function loadAccessKeys() {
+    if (!$("accessKeyList")) return;
+    try {
+      const data = await api("/api/security/access-keys");
+      accessKeysCache = data.keys || [];
+      const sel = $("activityKeySelect");
+      if (sel) {
+        sel.innerHTML =
+          '<option value="">Select key…</option>' +
+          accessKeysCache
+            .map((k) => `<option value="${esc(k.id)}">${esc(k.label)} (${esc(k.keyPrefix)}…)</option>`)
+            .join("");
+      }
+      const active = accessKeysCache.filter((k) => !k.revoked);
+      if (!accessKeysCache.length) {
+        $("accessKeyList").innerHTML = '<div class="empty">No keys yet</div>';
+        return;
+      }
+      $("accessKeyList").innerHTML = accessKeysCache
+        .map((k) => {
+          const expired = k.expiresAt && Date.parse(k.expiresAt) < Date.now();
+          const status = k.revoked ? "Revoked" : expired ? "Expired" : "Active";
+          return `<div class="akey-row">
+            <div>
+              <div><b>${esc(k.label)}</b> · ${esc(status)}</div>
+              <div class="akey-meta">
+                ${esc(k.keyPrefix)}… · Expires ${esc(fmtDate(parseTs(k.expiresAt) || Date.parse(k.expiresAt)))}<br/>
+                Last used ${k.lastUsedAt ? esc(fmtDate(parseTs(k.lastUsedAt) || Date.parse(k.lastUsedAt))) : "never"}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn btn-sm btn-outline" data-key-act="${esc(k.id)}">Activity</button>
+              ${!k.revoked ? `<button class="btn btn-sm btn-danger" data-key-rev="${esc(k.id)}">Revoke</button>` : ""}
+            </div>
+          </div>`;
+        })
+        .join("");
+      $("accessKeyList").querySelectorAll("[data-key-act]").forEach((btn) => {
+        btn.onclick = () => {
+          if (sel) sel.value = btn.dataset.keyAct;
+          loadKeyActivity(btn.dataset.keyAct);
+        };
+      });
+      $("accessKeyList").querySelectorAll("[data-key-rev]").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm("Revoke this key? Guest sessions band ho jayengi.")) return;
+          try {
+            await api("/api/security/access-keys/" + encodeURIComponent(btn.dataset.keyRev), { method: "DELETE" });
+            toast("Key revoked");
+            loadAccessKeys();
+          } catch (e) {
+            toast(e.message, true);
+          }
+        };
+      });
+    } catch (e) {
+      $("accessKeyList").innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
+  }
+
+  async function createAccessKey() {
+    const label = ($("keyLabel")?.value || "").trim() || "Access key";
+    const expiresIn = $("keyExpires")?.value || "1h";
+    try {
+      const data = await api("/api/security/access-keys", {
+        method: "POST",
+        body: JSON.stringify({ label, expiresIn }),
+      });
+      show("keyCreatedBox", true);
+      $("keyCreatedValue").textContent = data.key || "";
+      $("keyLabel").value = "";
+      toast("Key created — abhi copy kar lo");
+      loadAccessKeys();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  async function loadKeyActivity(keyId) {
+    if (!$("keyActivityList")) return;
+    if (!keyId) {
+      $("keyActivityList").innerHTML = '<div class="empty">Select a key</div>';
+      return;
+    }
+    try {
+      const data = await api("/api/security/access-keys/" + encodeURIComponent(keyId) + "/activity");
+      const list = data.activity || [];
+      if (!list.length) {
+        $("keyActivityList").innerHTML = '<div class="empty">No activity yet</div>';
+        return;
+      }
+      $("keyActivityList").innerHTML = list
+        .map(
+          (a) => `<div class="activity-item">
+            <div><b>${esc(a.action)}</b> — ${esc(a.detail || "")}</div>
+            <div class="muted">${esc(a.client || "")} · IP ${esc(a.ip || "—")} · ${esc(
+            fmtDate(parseTs(a.at) || Date.parse(a.at || a.createdAt))
+          )}</div>
+          </div>`
+        )
+        .join("");
+    } catch (e) {
+      $("keyActivityList").innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
+    }
   }
 
   function startRefresh() {
@@ -457,7 +858,7 @@
     activeProjectId = id;
     localStorage.setItem("dp_project", id);
     syncProjectSelects();
-    switchView("overview");
+    switchView(isGuest() ? "devices" : "overview");
     loadDevices();
     startRefresh();
   }

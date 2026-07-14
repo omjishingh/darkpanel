@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const { firebaseGet, firebasePut, firebasePatch, firebaseDelete, testConnection } = require("./firebase");
-const { createToken, authMiddleware } = require("./auth");
+const { createToken, authMiddleware, requireOwner } = require("./auth");
 const {
   send2FACode,
   verify2FACode,
@@ -17,8 +17,78 @@ const { buildFinanceReport } = require("./financeParser");
 const telegramUser = require("./telegramUser");
 const telegramMt = require("./telegramMtClient");
 
+const EXPIRES_IN_MS = {
+  "30m": 30 * 60 * 1000,
+  "1h": 60 * 60 * 1000,
+  "6h": 6 * 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+};
+
 function isWebClient(req) {
   return String(req.headers["x-client"] || "").toLowerCase() === "web";
+}
+
+function clientIp(req) {
+  const xf = req.headers["x-forwarded-for"];
+  if (xf) return String(xf).split(",")[0].trim();
+  return (req.socket && req.socket.remoteAddress) || null;
+}
+
+function sessionMetaFromReq(req, body = {}) {
+  const meta = extractLoginMeta(body, req);
+  return {
+    ...meta,
+    ip: clientIp(req),
+    userAgent: String(req.headers["user-agent"] || body.userAgent || "").slice(0, 256) || null,
+  };
+}
+
+function logGuestActivity(req, action, detail) {
+  if (req.user?.scope !== "guest" || !req.user.keyId) return;
+  try {
+    db.logKeyActivity(req.user.sub, req.user.keyId, {
+      action,
+      detail,
+      client: String(req.headers["x-client"] || req.user.client || "guest").slice(0, 64),
+      ip: clientIp(req),
+    });
+  } catch (_) {}
+}
+
+/** Block guests from security/telegram/firebase mutations and 2FA profile edits */
+function guestRestrictions(req, res, next) {
+  if (req.user?.scope !== "guest") return next();
+
+  const method = req.method.toUpperCase();
+  const path = req.path || "";
+
+  if (path === "/api/auth/logout" || path === "/api/security/my-activity") {
+    return next();
+  }
+  if (path === "/api/auth/me" && method === "GET") return next();
+  if (path === "/api/auth/theme" && method === "PATCH") {
+    return res.status(403).json({ error: "Guests cannot change theme" });
+  }
+  if (path === "/api/auth/change-password") {
+    return res.status(403).json({ error: "Guests cannot change password" });
+  }
+  if (path === "/api/auth/me" && method === "PATCH") {
+    return res.status(403).json({ error: "Guests cannot update account settings" });
+  }
+  if (path.startsWith("/api/security/")) {
+    return res.status(403).json({ error: "Owner access required" });
+  }
+  if (path.startsWith("/api/telegram/")) {
+    return res.status(403).json({ error: "Guests cannot access Telegram settings" });
+  }
+  if (
+    path.startsWith("/api/firebase-projects") &&
+    (method === "POST" || method === "PUT" || method === "DELETE")
+  ) {
+    return res.status(403).json({ error: "Guests cannot modify Firebase projects" });
+  }
+  return next();
 }
 
 const app = express();
@@ -164,9 +234,12 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     await sendLoginAlert(user.username, chatId, meta);
-    const token = createToken(user);
+    const sessionMeta = sessionMetaFromReq(req, req.body);
+    const session = db.createSession(user.id, sessionMeta);
+    const token = createToken(user, { sid: session.id, scope: "owner" });
     return res.json({
       token,
+      sessionId: session.id,
       username: user.username,
       userId: user.id,
       firebaseProjects: db.getFirebaseProjects(user.id),
@@ -192,9 +265,12 @@ app.post("/api/auth/verify-2fa", async (req, res) => {
     }
     const meta = { ...(result.meta || {}), ...extractLoginMeta(req.body, req) };
     await sendLoginAlert(user.username, getAlertChatId(user), meta);
-    const token = createToken(user);
+    const sessionMeta = sessionMetaFromReq(req, req.body);
+    const session = db.createSession(user.id, sessionMeta);
+    const token = createToken(user, { sid: session.id, scope: "owner" });
     res.json({
       token,
+      sessionId: session.id,
       username: user.username,
       userId: user.id,
       firebaseProjects: db.getFirebaseProjects(user.id),
@@ -204,21 +280,78 @@ app.post("/api/auth/verify-2fa", async (req, res) => {
   }
 });
 
-app.get("/api/auth/me", authMiddleware, (req, res) => {
+app.post("/api/auth/login-key", async (req, res) => {
+  try {
+    const { key, client, deviceId, model } = req.body || {};
+    if (!key) return res.status(400).json({ error: "key required" });
+    const found = db.findAccessKeyByRaw(key);
+    if (!found) {
+      return res.status(401).json({ error: "Invalid or expired access key" });
+    }
+    const { user, key: accessKey } = found;
+    const sessionMeta = {
+      ...sessionMetaFromReq(req, { client, deviceId, model }),
+      label: `Guest: ${accessKey.label}`,
+      keyId: accessKey.id,
+    };
+    const session = db.createSession(user.id, sessionMeta);
+    db.markAccessKeyUsed(user.id, accessKey.id);
+    db.logKeyActivity(user.id, accessKey.id, {
+      action: "login",
+      detail: `Guest login via key ${accessKey.keyPrefix}…`,
+      client: sessionMeta.client,
+      ip: sessionMeta.ip,
+    });
+    const token = createToken(
+      { id: user.id, username: user.username },
+      {
+        sid: session.id,
+        guestSid: session.id,
+        scope: "guest",
+        keyId: accessKey.id,
+        ownerId: user.id,
+      }
+    );
+    res.json({
+      token,
+      sessionId: session.id,
+      scope: "guest",
+      keyId: accessKey.id,
+      keyLabel: accessKey.label,
+      username: user.username,
+      userId: user.id,
+      firebaseProjects: db.getFirebaseProjects(user.id),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Key login failed" });
+  }
+});
+
+app.get("/api/auth/me", authMiddleware, guestRestrictions, (req, res) => {
   const user = db.findUserById(req.user.sub);
   if (!user) return res.status(404).json({ error: "User not found" });
-  res.json({
+  const scope = req.user.scope || "owner";
+  const payload = {
     username: user.username,
     userId: user.id,
+    scope,
+    theme: db.normalizeTheme(user.theme),
     twoFactorEnabled: !!user.twoFactorEnabled,
     telegramChatId: user.telegramChatId || null,
     telegramBotConnected: !!(user.telegramBot && user.telegramBot.token),
     global2FA: isGlobal2FAEnabled(),
     firebaseProjects: db.getFirebaseProjects(user.id),
-  });
+  };
+  if (scope === "guest" && req.user.keyId) {
+    payload.keyId = req.user.keyId;
+    const keys = user.accessKeys || [];
+    const ak = keys.find((k) => k.id === req.user.keyId);
+    payload.keyLabel = ak ? ak.label : null;
+  }
+  res.json(payload);
 });
 
-app.patch("/api/auth/me", authMiddleware, (req, res) => {
+app.patch("/api/auth/me", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     const { twoFactorEnabled, telegramChatId } = req.body || {};
     const updates = {};
@@ -252,8 +385,157 @@ app.patch("/api/auth/me", authMiddleware, (req, res) => {
   }
 });
 
+app.post("/api/auth/change-password", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body || {};
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: "oldPassword and newPassword required" });
+    }
+    db.changePassword(req.user.sub, oldPassword, newPassword);
+    const exceptSid = req.user.sid || null;
+    db.revokeAllSessions(req.user.sub, exceptSid);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.patch("/api/auth/theme", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.preset === undefined && body.primary === undefined) {
+      return res.status(400).json({ error: "preset or primary required" });
+    }
+    const theme = db.setTheme(req.user.sub, body);
+    res.json({ ok: true, theme });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/logout", authMiddleware, (req, res) => {
+  try {
+    const sid = req.user.sid || req.user.guestSid;
+    if (sid) {
+      const userId = req.user.scope === "guest" ? req.user.ownerId || req.user.sub : req.user.sub;
+      try {
+        db.revokeSession(userId, sid);
+      } catch (_) {}
+      if (req.user.scope === "guest" && req.user.keyId) {
+        db.logKeyActivity(userId, req.user.keyId, {
+          action: "logout",
+          detail: "Guest session ended",
+          client: String(req.headers["x-client"] || "guest").slice(0, 64),
+          ip: clientIp(req),
+        });
+      }
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Security: sessions & access keys ───────────────────────
+app.get("/api/security/sessions", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+  try {
+    res.json({ sessions: db.listSessions(req.user.sub) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/security/sessions/:sid", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+  try {
+    db.revokeSession(req.user.sub, req.params.sid);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/security/sessions", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+  try {
+    const exceptSid =
+      req.query.all === "1" || req.body?.all === true ? null : req.user.sid || null;
+    const revoked = db.revokeAllSessions(req.user.sub, exceptSid);
+    res.json({ ok: true, revoked });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/security/access-keys", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+  try {
+    res.json({ keys: db.listAccessKeys(req.user.sub) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/security/access-keys", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+  try {
+    const { label, expiresIn } = req.body || {};
+    const ms = EXPIRES_IN_MS[String(expiresIn || "")];
+    if (!ms) {
+      return res.status(400).json({
+        error: "expiresIn must be one of: 30m, 1h, 6h, 24h, 7d",
+      });
+    }
+    const { key, record } = db.createAccessKey(req.user.sub, {
+      label: label || "Access key",
+      expiresInMs: ms,
+    });
+    res.status(201).json({ ok: true, key, accessKey: record });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/security/access-keys/:id", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+  try {
+    const accessKey = db.revokeAccessKey(req.user.sub, req.params.id);
+    db.logKeyActivity(req.user.sub, req.params.id, {
+      action: "revoke",
+      detail: "Key revoked by owner",
+      client: String(req.headers["x-client"] || "web").slice(0, 64),
+      ip: clientIp(req),
+    });
+    res.json({ ok: true, accessKey });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get(
+  "/api/security/access-keys/:id/activity",
+  authMiddleware,
+  guestRestrictions,
+  requireOwner,
+  (req, res) => {
+    try {
+      const activity = db.listKeyActivity(req.user.sub, req.params.id);
+      res.json({ activity });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+app.get("/api/security/my-activity", authMiddleware, (req, res) => {
+  try {
+    if (req.user.scope !== "guest" || !req.user.keyId) {
+      return res.status(403).json({ error: "Guest key session required" });
+    }
+    const activity = db.listKeyActivity(req.user.sub, req.user.keyId);
+    res.json({ activity });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Firebase Projects (per user) ───────────────────────────
-app.get("/api/firebase-projects", authMiddleware, (req, res) => {
+app.get("/api/firebase-projects", authMiddleware, guestRestrictions, (req, res) => {
   try {
     const projects = db.getFirebaseProjects(req.user.sub, isWebClient(req));
     res.json({ projects });
@@ -262,7 +544,7 @@ app.get("/api/firebase-projects", authMiddleware, (req, res) => {
   }
 });
 
-app.post("/api/firebase-projects", authMiddleware, async (req, res) => {
+app.post("/api/firebase-projects", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const { name, firebaseUrl, firebaseSecret } = req.body || {};
     const web = isWebClient(req);
@@ -279,7 +561,7 @@ app.post("/api/firebase-projects", authMiddleware, async (req, res) => {
   }
 });
 
-app.put("/api/firebase-projects/:projectId", authMiddleware, async (req, res) => {
+app.put("/api/firebase-projects/:projectId", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const web = isWebClient(req);
     const project = db.updateFirebaseProject(
@@ -296,7 +578,7 @@ app.put("/api/firebase-projects/:projectId", authMiddleware, async (req, res) =>
   }
 });
 
-app.delete("/api/firebase-projects/:projectId", authMiddleware, (req, res) => {
+app.delete("/api/firebase-projects/:projectId", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     db.deleteFirebaseProject(req.user.sub, req.params.projectId);
     res.json({ ok: true });
@@ -305,7 +587,7 @@ app.delete("/api/firebase-projects/:projectId", authMiddleware, (req, res) => {
   }
 });
 
-app.post("/api/firebase-projects/:projectId/test", authMiddleware, async (req, res) => {
+app.post("/api/firebase-projects/:projectId/test", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
@@ -317,10 +599,11 @@ app.post("/api/firebase-projects/:projectId/test", authMiddleware, async (req, r
 });
 
 // ─── Firebase data (scoped to project) ──────────────────────
-app.get("/api/projects/:projectId/dashboard", authMiddleware, async (req, res) => {
+app.get("/api/projects/:projectId/dashboard", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
+    logGuestActivity(req, "dashboard", `project ${project.id}`);
     const clients = await firebaseGet(project.firebaseUrl, project.firebaseSecret, "clients");
     const deviceIds = clients ? Object.keys(clients) : [];
     const messages = {};
@@ -342,10 +625,11 @@ app.get("/api/projects/:projectId/dashboard", authMiddleware, async (req, res) =
   }
 });
 
-app.get("/api/projects/:projectId/clients", authMiddleware, async (req, res) => {
+app.get("/api/projects/:projectId/clients", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
+    logGuestActivity(req, "clients", `list clients on ${project.id}`);
     const data = await firebaseGet(project.firebaseUrl, project.firebaseSecret, "clients");
     res.json(data || {});
   } catch (err) {
@@ -353,10 +637,11 @@ app.get("/api/projects/:projectId/clients", authMiddleware, async (req, res) => 
   }
 });
 
-app.get("/api/projects/:projectId/clients/:id", authMiddleware, async (req, res) => {
+app.get("/api/projects/:projectId/clients/:id", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
+    logGuestActivity(req, "clients", `view client ${req.params.id}`);
     const data = await firebaseGet(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`);
     res.json(data || null);
   } catch (err) {
@@ -364,10 +649,11 @@ app.get("/api/projects/:projectId/clients/:id", authMiddleware, async (req, res)
   }
 });
 
-app.delete("/api/projects/:projectId/clients/:id", authMiddleware, async (req, res) => {
+app.delete("/api/projects/:projectId/clients/:id", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
+    logGuestActivity(req, "clients", `delete client ${req.params.id}`);
     await firebaseDelete(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`);
     res.json({ ok: true });
   } catch (err) {
@@ -375,7 +661,7 @@ app.delete("/api/projects/:projectId/clients/:id", authMiddleware, async (req, r
   }
 });
 
-app.get("/api/projects/:projectId/messages/:deviceId", authMiddleware, async (req, res) => {
+app.get("/api/projects/:projectId/messages/:deviceId", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
@@ -390,7 +676,7 @@ app.get("/api/projects/:projectId/messages/:deviceId", authMiddleware, async (re
   }
 });
 
-app.get("/api/projects/:projectId/finance/:deviceId", authMiddleware, async (req, res) => {
+app.get("/api/projects/:projectId/finance/:deviceId", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
@@ -410,7 +696,7 @@ app.get("/api/projects/:projectId/finance/:deviceId", authMiddleware, async (req
   }
 });
 
-app.post("/api/projects/:projectId/clients/:id/send-sms", authMiddleware, async (req, res) => {
+app.post("/api/projects/:projectId/clients/:id/send-sms", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
@@ -424,13 +710,14 @@ app.post("/api/projects/:projectId/clients/:id/send-sms", authMiddleware, async 
       message,
       isSended: false,
     });
+    logGuestActivity(req, "send-sms", `to ${to} on device ${req.params.id}`);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.patch("/api/projects/:projectId/clients/:id/notes", authMiddleware, async (req, res) => {
+app.patch("/api/projects/:projectId/clients/:id/notes", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
@@ -438,13 +725,14 @@ app.patch("/api/projects/:projectId/clients/:id/notes", authMiddleware, async (r
     await firebasePatch(project.firebaseUrl, project.firebaseSecret, `clients/${req.params.id}`, {
       notes: String(notes || ""),
     });
+    logGuestActivity(req, "notes", `update notes on ${req.params.id}`);
     res.json({ ok: true, notes: String(notes || "") });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, async (req, res) => {
+app.post("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
@@ -472,13 +760,14 @@ app.post("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, asyn
       [statusField]: isActive ? String(to || "active") : "inactive",
       forwardTo: String(to || ""),
     });
+    logGuestActivity(req, "forwarding", `${type} on ${req.params.id}`);
     res.json({ ok: true, ...payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, async (req, res) => {
+app.get("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, guestRestrictions, async (req, res) => {
   const project = resolveProject(req, res);
   if (!project) return;
   try {
@@ -502,7 +791,7 @@ app.get("/api/projects/:projectId/clients/:id/forwarding", authMiddleware, async
 });
 
 // ─── User Telegram bot (SMS auto / groups) ──────────────────
-app.get("/api/telegram/bot", authMiddleware, (req, res) => {
+app.get("/api/telegram/bot", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     const user = db.findUserById(req.user.sub);
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -517,7 +806,7 @@ app.get("/api/telegram/bot", authMiddleware, (req, res) => {
   }
 });
 
-app.post("/api/telegram/bot", authMiddleware, async (req, res) => {
+app.post("/api/telegram/bot", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const { token } = req.body || {};
     const info = await telegramUser.connectBot(req.user.sub, token, req);
@@ -527,7 +816,7 @@ app.post("/api/telegram/bot", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/telegram/bot/webhook", authMiddleware, async (req, res) => {
+app.post("/api/telegram/bot/webhook", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const result = await telegramUser.refreshWebhook(req.user.sub, req);
     res.json(result);
@@ -536,7 +825,7 @@ app.post("/api/telegram/bot/webhook", authMiddleware, async (req, res) => {
   }
 });
 
-app.delete("/api/telegram/bot", authMiddleware, async (req, res) => {
+app.delete("/api/telegram/bot", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const result = await telegramUser.disconnectBot(req.user.sub);
     res.json({ ok: true, ...result });
@@ -545,7 +834,7 @@ app.delete("/api/telegram/bot", authMiddleware, async (req, res) => {
   }
 });
 
-app.get("/api/telegram/groups", authMiddleware, (req, res) => {
+app.get("/api/telegram/groups", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     const user = db.findUserById(req.user.sub);
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -590,7 +879,7 @@ app.get("/api/telegram/groups", authMiddleware, (req, res) => {
   }
 });
 
-app.post("/api/telegram/groups/refresh", authMiddleware, async (req, res) => {
+app.post("/api/telegram/groups/refresh", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     let botResult = { updated: 0, groups: [] };
     let userResult = { count: 0, groups: [] };
@@ -610,7 +899,7 @@ app.post("/api/telegram/groups/refresh", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/telegram/groups", authMiddleware, async (req, res) => {
+app.post("/api/telegram/groups", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const { chatId, title, type, source } = req.body || {};
     if (!chatId) return res.status(400).json({ error: "chatId required" });
@@ -624,7 +913,7 @@ app.post("/api/telegram/groups", authMiddleware, async (req, res) => {
   }
 });
 
-app.delete("/api/telegram/groups/:chatId", authMiddleware, (req, res) => {
+app.delete("/api/telegram/groups/:chatId", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     let ok = false;
     try {
@@ -642,7 +931,7 @@ app.delete("/api/telegram/groups/:chatId", authMiddleware, (req, res) => {
   }
 });
 
-app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) => {
+app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     const { projectId, deviceId, deviceName, source } = req.body || {};
     if (!projectId || !deviceId) {
@@ -705,7 +994,7 @@ app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) =>
   }
 });
 
-app.delete("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) => {
+app.delete("/api/telegram/groups/:chatId/auto-send", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     let g = null;
     try {
@@ -721,7 +1010,7 @@ app.delete("/api/telegram/groups/:chatId/auto-send", authMiddleware, (req, res) 
   }
 });
 
-app.delete("/api/telegram/auto-send", authMiddleware, (req, res) => {
+app.delete("/api/telegram/auto-send", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     const deviceId = req.query.deviceId || req.body?.deviceId;
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
@@ -733,7 +1022,7 @@ app.delete("/api/telegram/auto-send", authMiddleware, (req, res) => {
   }
 });
 
-app.get("/api/telegram/auto-send/events", authMiddleware, (req, res) => {
+app.get("/api/telegram/auto-send/events", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     const deviceId = req.query.deviceId || null;
     const events = db.listAutoSendEvents(req.user.sub, deviceId, Number(req.query.limit) || 20);
@@ -744,7 +1033,7 @@ app.get("/api/telegram/auto-send/events", authMiddleware, (req, res) => {
 });
 
 // ─── Telegram USER account (MTProto) ────────────────────────
-app.get("/api/telegram/user", authMiddleware, (req, res) => {
+app.get("/api/telegram/user", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
   try {
     res.json(telegramMt.sanitizeUserTg(req.user.sub));
   } catch (err) {
@@ -752,7 +1041,7 @@ app.get("/api/telegram/user", authMiddleware, (req, res) => {
   }
 });
 
-app.post("/api/telegram/user/send-code", authMiddleware, async (req, res) => {
+app.post("/api/telegram/user/send-code", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const { apiId, apiHash, phone } = req.body || {};
     const result = await telegramMt.startCode(req.user.sub, { apiId, apiHash, phone });
@@ -762,7 +1051,7 @@ app.post("/api/telegram/user/send-code", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/telegram/user/verify", authMiddleware, async (req, res) => {
+app.post("/api/telegram/user/verify", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const { code, password } = req.body || {};
     const result = await telegramMt.verifyCode(req.user.sub, { code, password });
@@ -773,7 +1062,7 @@ app.post("/api/telegram/user/verify", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/telegram/user/join", authMiddleware, async (req, res) => {
+app.post("/api/telegram/user/join", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const { link } = req.body || {};
     if (!link) return res.status(400).json({ error: "Invite / channel link required" });
@@ -784,7 +1073,7 @@ app.post("/api/telegram/user/join", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/telegram/user/sync", authMiddleware, async (req, res) => {
+app.post("/api/telegram/user/sync", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const result = await telegramMt.syncDialogs(req.user.sub);
     res.json(result);
@@ -793,7 +1082,7 @@ app.post("/api/telegram/user/sync", authMiddleware, async (req, res) => {
   }
 });
 
-app.delete("/api/telegram/user", authMiddleware, async (req, res) => {
+app.delete("/api/telegram/user", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const result = await telegramMt.disconnectUser(req.user.sub);
     res.json({ ok: true, ...result });
@@ -802,7 +1091,7 @@ app.delete("/api/telegram/user", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/telegram/groups/:chatId/send-intercept", authMiddleware, async (req, res) => {
+app.post("/api/telegram/groups/:chatId/send-intercept", authMiddleware, guestRestrictions, requireOwner, async (req, res) => {
   try {
     const { to, message } = req.body || {};
     if (!to || !message) return res.status(400).json({ error: "to and message required" });
