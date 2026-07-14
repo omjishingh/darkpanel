@@ -277,6 +277,7 @@ function sanitizeAccessKey(key) {
     revoked: !!key.revoked,
     lastUsedAt: key.lastUsedAt || null,
     permissions: normalizePermissions(key.permissions),
+    projectIds: normalizeProjectIds(key.projectIds),
   };
 }
 
@@ -288,6 +289,7 @@ const KEY_PERM_IDS = [
   "notes",
   "delete_device",
   "finance",
+  "auto_send",
 ];
 
 /** Full guest operator access — used for legacy keys with no permissions field */
@@ -300,6 +302,7 @@ function defaultKeyPermissions() {
     notes: true,
     delete_device: true,
     finance: true,
+    auto_send: false,
   };
 }
 
@@ -320,6 +323,11 @@ function normalizePermissions(perms) {
   // Device list/view is always on for any valid key
   out.devices = true;
   return out;
+}
+
+function normalizeProjectIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  return [...new Set(ids.map((id) => String(id || "").trim()).filter(Boolean))];
 }
 
 function permissionsToList(perms) {
@@ -441,13 +449,26 @@ function changePassword(userId, oldPassword, newPassword) {
   return true;
 }
 
-function createAccessKey(userId, { label, expiresInMs, permissions }) {
+function createAccessKey(userId, { label, expiresInMs, permissions, projectIds }) {
   const db = readDb();
   const user = db.users[userId];
   if (!user) throw new Error("User not found");
   ensureSecurityArrays(user);
   const ms = Number(expiresInMs);
   if (!ms || ms <= 0) throw new Error("expiresInMs required");
+  // Hard caps: min 1 minute, max 30 days
+  const MIN_MS = 60 * 1000;
+  const MAX_MS = 30 * 24 * 60 * 60 * 1000;
+  if (ms < MIN_MS) throw new Error("Minimum expiry is 1 minute");
+  if (ms > MAX_MS) throw new Error("Maximum expiry is 30 days");
+
+  const allowed = normalizeProjectIds(projectIds);
+  if (!allowed.length) throw new Error("Select at least one Firebase project");
+  const owned = new Set((user.firebaseProjects || []).map((p) => String(p.id)));
+  for (const pid of allowed) {
+    if (!owned.has(pid)) throw new Error("Invalid Firebase project: " + pid);
+  }
+
   const rawKey = `DPK_${crypto.randomBytes(24).toString("base64url")}`;
   const now = Date.now();
   const perms = normalizePermissions(permissions);
@@ -461,6 +482,7 @@ function createAccessKey(userId, { label, expiresInMs, permissions }) {
     revoked: false,
     lastUsedAt: null,
     permissions: perms,
+    projectIds: allowed,
   };
   user.accessKeys.unshift(record);
   writeDb(db);
@@ -556,6 +578,24 @@ function getAccessKeyPermissions(userId, keyId) {
   const key = (user.accessKeys || []).find((k) => k.id === keyId);
   if (!key) return defaultKeyPermissions();
   return normalizePermissions(key.permissions);
+}
+
+function getAccessKeyProjectIds(userId, keyId) {
+  const user = findUserById(userId);
+  if (!user || !keyId) return [];
+  const key = (user.accessKeys || []).find((k) => k.id === keyId);
+  if (!key) return [];
+  // Legacy keys without projectIds → all owned projects
+  if (!Array.isArray(key.projectIds) || key.projectIds.length === 0) {
+    return (user.firebaseProjects || []).map((p) => String(p.id));
+  }
+  return normalizeProjectIds(key.projectIds);
+}
+
+function guestCanAccessProject(userId, keyId, projectId) {
+  if (!keyId) return true;
+  const allowed = getAccessKeyProjectIds(userId, keyId);
+  return allowed.includes(String(projectId));
 }
 
 function setTheme(userId, theme) {
@@ -737,7 +777,10 @@ module.exports = {
   logKeyActivity,
   listKeyActivity,
   getAccessKeyPermissions,
+  getAccessKeyProjectIds,
+  guestCanAccessProject,
   normalizePermissions,
+  normalizeProjectIds,
   permissionsToList,
   KEY_PERM_IDS,
   MAIN_KEY_ACTIONS,

@@ -23,6 +23,7 @@
     notes: true,
     delete_device: true,
     finance: true,
+    auto_send: false,
   };
 
   function isGuest() {
@@ -58,9 +59,9 @@
         });
       });
     });
-    // Send Auto needs Telegram - guests never
+    // Send Auto — guests only if auto_send perm
     ["#btnSendAuto", "#btnSendAutoOff", "#sendAutoStatus", "#sendAutoLatest", "#sendAutoEvents"].forEach((sel) => {
-      document.querySelectorAll(sel).forEach((el) => el.classList.toggle("hidden", isGuest()));
+      document.querySelectorAll(sel).forEach((el) => el.classList.toggle("hidden", isGuest() && !hasPerm("auto_send")));
     });
     // if no messages, leave send tab; if no send, leave sms
     if (!hasPerm("messages") && hasPerm("send_sms")) {
@@ -656,6 +657,18 @@
       navigator.clipboard?.writeText(v).then(() => toast("Copied")).catch(() => toast("Copy manually", true));
     });
     $("activityKeySelect")?.addEventListener("change", (e) => loadKeyActivity(e.target.value));
+    $("keyExpires")?.addEventListener("change", syncKeyExpiryUi);
+    syncKeyExpiryUi();
+  }
+
+  function syncKeyExpiryUi() {
+    const custom = ($("keyExpires")?.value || "") === "custom";
+    const mins = $("keyExpiresMinutes");
+    if (mins) {
+      mins.disabled = !custom;
+      mins.style.opacity = custom ? "1" : "0.5";
+      if (custom && !mins.value) mins.value = "1";
+    }
   }
 
   async function loadSecurityPage() {
@@ -666,6 +679,9 @@
       if ($("sec2faEnabled")) $("sec2faEnabled").checked = !!me.twoFactorEnabled;
       if ($("sec2faGlobalNote")) show("sec2faGlobalNote", !!me.global2FA);
     } catch (_) {}
+    if (!projects.length) await loadProjects(false);
+    fillKeyProjectChecks();
+    syncKeyExpiryUi();
     await Promise.all([loadSessions(), loadAccessKeys()]);
   }
 
@@ -796,11 +812,18 @@
             notes: "Notes",
             delete_device: "Delete",
             finance: "Finance",
+            auto_send: "Auto Send",
           };
           const chips = Object.keys(labels)
             .filter((id) => perms[id])
             .map((id) => `<span class="perm-chip">${labels[id]}</span>`)
             .join("") || '<span class="perm-chip">Devices</span>';
+          const fbChips = (k.projectIds || [])
+            .map((pid) => {
+              const p = projects.find((x) => String(x.id) === String(pid));
+              return `<span class="perm-chip">${esc(p ? p.name : pid)}</span>`;
+            })
+            .join("") || '<span class="perm-chip">All Firebase (legacy)</span>';
           return `<div class="akey-row">
             <div>
               <div><b>${esc(k.label)}</b>  |  ${esc(status)}</div>
@@ -808,7 +831,8 @@
                 ${esc(k.keyPrefix)}...  |  Expires ${esc(fmtDate(parseTs(k.expiresAt) || Date.parse(k.expiresAt)))}<br/>
                 Last used ${k.lastUsedAt ? esc(fmtDate(parseTs(k.lastUsedAt) || Date.parse(k.lastUsedAt))) : "never"}
               </div>
-              <div class="perm-chips">${chips}</div>
+              <div class="perm-chips" style="margin-top:6px">${chips}</div>
+              <div class="perm-chips" style="margin-top:4px">${fbChips}</div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <button class="btn btn-sm btn-outline" data-key-act="${esc(k.id)}">Activity</button>
@@ -840,20 +864,53 @@
     }
   }
 
+  function fillKeyProjectChecks() {
+    const box = $("keyProjects");
+    if (!box) return;
+    if (!projects.length) {
+      box.innerHTML = '<div class="empty">Pehle Firebase project add karo</div>';
+      return;
+    }
+    box.innerHTML = projects
+      .map(
+        (p) =>
+          `<label class="key-perm"><input type="checkbox" value="${esc(p.id)}" checked /> ${esc(p.name)}</label>`
+      )
+      .join("");
+  }
+
   async function createAccessKey() {
     const label = ($("keyLabel")?.value || "").trim() || "Access key";
-    const expiresIn = $("keyExpires")?.value || "1h";
+    const expiresMode = $("keyExpires")?.value || "1h";
     const permissions = Array.from(document.querySelectorAll("#keyPerms input[type=checkbox]:checked")).map(
+      (el) => el.value
+    );
+    const projectIds = Array.from(document.querySelectorAll("#keyProjects input[type=checkbox]:checked")).map(
       (el) => el.value
     );
     if (!permissions.length) {
       toast("Kam se kam ek permission select karo", true);
       return;
     }
+    if (!projectIds.length) {
+      toast("Kam se kam ek Firebase select karo", true);
+      return;
+    }
+    const body = { label, permissions, projectIds };
+    if (expiresMode === "custom") {
+      const mins = Number($("keyExpiresMinutes")?.value);
+      if (!mins || mins < 1) {
+        toast("Custom minutes daalo (min 1)", true);
+        return;
+      }
+      body.expiresMinutes = mins;
+    } else {
+      body.expiresIn = expiresMode;
+    }
     try {
       const data = await api("/api/security/access-keys", {
         method: "POST",
-        body: JSON.stringify({ label, expiresIn, permissions }),
+        body: JSON.stringify(body),
       });
       show("keyCreatedBox", true);
       $("keyCreatedValue").textContent = data.key || "";
@@ -940,6 +997,7 @@
       projects = data.projects || [];
       if (renderList) renderProjectList();
       syncProjectSelects();
+      fillKeyProjectChecks();
     } catch (e) {
       if (e.message.includes("Unauthorized")) logout();
       else toast(e.message, true);

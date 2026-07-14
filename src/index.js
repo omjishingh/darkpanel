@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const { firebaseGet, firebasePut, firebasePatch, firebaseDelete, testConnection } = require("./firebase");
-const { createToken, authMiddleware, requireOwner, requireKeyPerm } = require("./auth");
+const { createToken, authMiddleware, requireOwner, requireKeyPerm, requireOwnerOrKeyPerm, requireGuestProjectAccess } = require("./auth");
 const {
   send2FACode,
   verify2FACode,
@@ -80,7 +80,15 @@ function guestRestrictions(req, res, next) {
   if (path.startsWith("/api/security/")) {
     return res.status(403).json({ error: "Owner access required" });
   }
+  // Guests with auto_send may use bind / status endpoints only
   if (path.startsWith("/api/telegram/")) {
+    const autoPaths = [
+      method === "GET" && path === "/api/telegram/groups",
+      method === "POST" && /^\/api\/telegram\/groups\/[^/]+\/auto-send$/.test(path),
+      method === "DELETE" && path === "/api/telegram/auto-send",
+      method === "GET" && path === "/api/telegram/auto-send/events",
+    ];
+    if (autoPaths.some(Boolean)) return next();
     return res.status(403).json({ error: "Guests cannot access Telegram settings" });
   }
   if (
@@ -92,9 +100,56 @@ function guestRestrictions(req, res, next) {
   return next();
 }
 
+/** Simple in-memory rate limit (no extra deps) */
+const rateBuckets = new Map();
+function rateLimit({ windowMs = 60_000, max = 30, prefix = "rl" } = {}) {
+  return (req, res, next) => {
+    const ip = clientIp(req) || "unknown";
+    const key = `${prefix}:${ip}`;
+    const now = Date.now();
+    let bucket = rateBuckets.get(key) || [];
+    bucket = bucket.filter((t) => now - t < windowMs);
+    if (bucket.length >= max) {
+      return res.status(429).json({ error: "Too many requests — wait and retry" });
+    }
+    bucket.push(now);
+    rateBuckets.set(key, bucket);
+    next();
+  };
+}
+
+function parseKeyExpiryMs(body = {}) {
+  // Custom minutes (1 .. 43200 = 30 days)
+  if (body.expiresMinutes != null && body.expiresMinutes !== "") {
+    const mins = Number(body.expiresMinutes);
+    if (!Number.isFinite(mins) || mins < 1) throw new Error("expiresMinutes must be at least 1");
+    if (mins > 30 * 24 * 60) throw new Error("expiresMinutes max is 43200 (30 days)");
+    return Math.round(mins * 60 * 1000);
+  }
+  if (body.expiresInMs != null && body.expiresInMs !== "") {
+    const ms = Number(body.expiresInMs);
+    if (!Number.isFinite(ms) || ms < 60_000) throw new Error("expiresInMs min is 60000 (1 minute)");
+    if (ms > 30 * 24 * 60 * 60 * 1000) throw new Error("expiresInMs max is 30 days");
+    return Math.round(ms);
+  }
+  const preset = EXPIRES_IN_MS[String(body.expiresIn || "")];
+  if (preset) return preset;
+  throw new Error("Provide expiresMinutes (e.g. 1) or expiresIn: 30m|1h|6h|24h|7d");
+}
+
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+app.use(cors({ origin: true, credentials: false }));
+app.use(express.json({ limit: "512kb" }));
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("X-XSS-Protection", "0");
+  next();
+});
 
 function resolveProject(req, res) {
   const userId = req.user.sub;
@@ -102,6 +157,12 @@ function resolveProject(req, res) {
   if (!projectId) {
     res.status(400).json({ error: "projectId required" });
     return null;
+  }
+  if (req.user?.scope === "guest" && req.user.keyId) {
+    if (!db.guestCanAccessProject(userId, req.user.keyId, projectId)) {
+      res.status(403).json({ error: "This key has no access to that Firebase project" });
+      return null;
+    }
   }
   try {
     const project = db.getFirebaseProject(userId, projectId);
@@ -113,13 +174,9 @@ function resolveProject(req, res) {
 }
 
 app.get("/api/health", (_, res) => {
-  const info = db.getDbInfo();
   res.json({
     ok: true,
     global2FA: isGlobal2FAEnabled(),
-    users: info.users,
-    dataPath: info.path,
-    dataWarning: info.warning,
   });
 });
 
@@ -133,7 +190,7 @@ app.get("/api", (_, res) => {
 });
 
 // --- Admin: create/manage accounts ---------------------------
-app.post("/api/admin/accounts", adminMiddleware, (req, res) => {
+app.post("/api/admin/accounts", rateLimit({ windowMs: 60_000, max: 10, prefix: "admin" }), adminMiddleware, (req, res) => {
   try {
     const { username, password, twoFactorEnabled, telegramChatId } = req.body || {};
     if (!username || !password) {
@@ -212,7 +269,7 @@ function extractLoginMeta(body = {}, req) {
 }
 
 // --- Auth ---------------------------------------------------
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", rateLimit({ windowMs: 60_000, max: 10, prefix: "login" }), async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
@@ -281,7 +338,7 @@ app.post("/api/auth/verify-2fa", async (req, res) => {
   }
 });
 
-app.post("/api/auth/login-key", async (req, res) => {
+app.post("/api/auth/login-key", rateLimit({ windowMs: 60_000, max: 10, prefix: "loginkey" }), async (req, res) => {
   try {
     const { key, client, deviceId, model } = req.body || {};
     if (!key) return res.status(400).json({ error: "key required" });
@@ -304,6 +361,9 @@ app.post("/api/auth/login-key", async (req, res) => {
       ip: sessionMeta.ip,
     });
     const permissions = db.normalizePermissions(accessKey.permissions);
+    const projectIds = db.getAccessKeyProjectIds(user.id, accessKey.id);
+    const allProjects = db.getFirebaseProjects(user.id);
+    const firebaseProjects = allProjects.filter((p) => projectIds.includes(String(p.id)));
     const token = createToken(
       { id: user.id, username: user.username },
       {
@@ -312,6 +372,7 @@ app.post("/api/auth/login-key", async (req, res) => {
         scope: "guest",
         keyId: accessKey.id,
         ownerId: user.id,
+        expiresAt: accessKey.expiresAt,
       }
     );
     res.json({
@@ -321,9 +382,10 @@ app.post("/api/auth/login-key", async (req, res) => {
       keyId: accessKey.id,
       keyLabel: accessKey.label,
       permissions,
+      projectIds,
       username: user.username,
       userId: user.id,
-      firebaseProjects: db.getFirebaseProjects(user.id),
+      firebaseProjects,
     });
   } catch (err) {
     res.status(500).json({ error: err.message || "Key login failed" });
@@ -352,6 +414,9 @@ app.get("/api/auth/me", authMiddleware, guestRestrictions, (req, res) => {
     payload.keyLabel = ak ? ak.label : null;
     payload.permissions =
       req.user.permissions || db.getAccessKeyPermissions(user.id, req.user.keyId);
+    payload.projectIds = db.getAccessKeyProjectIds(user.id, req.user.keyId);
+    const allow = new Set(payload.projectIds);
+    payload.firebaseProjects = (payload.firebaseProjects || []).filter((p) => allow.has(String(p.id)));
   }
   res.json(payload);
 });
@@ -478,25 +543,36 @@ app.get("/api/security/access-keys", authMiddleware, guestRestrictions, requireO
   }
 });
 
-app.post("/api/security/access-keys", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+app.post(
+  "/api/security/access-keys",
+  authMiddleware,
+  guestRestrictions,
+  requireOwner,
+  rateLimit({ windowMs: 60_000, max: 15, prefix: "akey" }),
+  (req, res) => {
   try {
-    const { label, expiresIn, permissions } = req.body || {};
-    const ms = EXPIRES_IN_MS[String(expiresIn || "")];
-    if (!ms) {
-      return res.status(400).json({
-        error: "expiresIn must be one of: 30m, 1h, 6h, 24h, 7d",
-      });
+    const { label, permissions, projectIds } = req.body || {};
+    let expiresInMs;
+    try {
+      expiresInMs = parseKeyExpiryMs(req.body || {});
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
     }
     const permsList = Array.isArray(permissions) ? permissions : null;
     if (!permsList || permsList.length === 0) {
       return res.status(400).json({
-        error: "Select at least one permission (SMS read, send, forward, etc.)",
+        error: "Select at least one permission (SMS read, send, forward, auto send, etc.)",
       });
+    }
+    const projects = Array.isArray(projectIds) ? projectIds : [];
+    if (!projects.length) {
+      return res.status(400).json({ error: "Select at least one Firebase project for this key" });
     }
     const { key, record } = db.createAccessKey(req.user.sub, {
       label: label || "Access key",
-      expiresInMs: ms,
+      expiresInMs,
       permissions: ["devices", ...permsList],
+      projectIds: projects,
     });
     res.status(201).json({ ok: true, key, accessKey: record });
   } catch (err) {
@@ -549,7 +625,11 @@ app.get("/api/security/my-activity", authMiddleware, (req, res) => {
 // --- Firebase Projects (per user) ---------------------------
 app.get("/api/firebase-projects", authMiddleware, guestRestrictions, (req, res) => {
   try {
-    const projects = db.getFirebaseProjects(req.user.sub, isWebClient(req));
+    let projects = db.getFirebaseProjects(req.user.sub, isWebClient(req));
+    if (req.user.scope === "guest" && req.user.keyId) {
+      const allow = new Set(db.getAccessKeyProjectIds(req.user.sub, req.user.keyId));
+      projects = projects.filter((p) => allow.has(String(p.id)));
+    }
     res.json({ projects });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -900,7 +980,7 @@ app.delete("/api/telegram/bot", authMiddleware, guestRestrictions, requireOwner,
   }
 });
 
-app.get("/api/telegram/groups", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+app.get("/api/telegram/groups", authMiddleware, guestRestrictions, requireOwnerOrKeyPerm("auto_send"), (req, res) => {
   try {
     const user = db.findUserById(req.user.sub);
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -997,11 +1077,18 @@ app.delete("/api/telegram/groups/:chatId", authMiddleware, guestRestrictions, re
   }
 });
 
-app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+app.post("/api/telegram/groups/:chatId/auto-send", authMiddleware, guestRestrictions, requireOwnerOrKeyPerm("auto_send"), (req, res) => {
   try {
     const { projectId, deviceId, deviceName, source, from, sim } = req.body || {};
     if (!projectId || !deviceId) {
       return res.status(400).json({ error: "projectId and deviceId required" });
+    }
+    if (
+      req.user.scope === "guest" &&
+      req.user.keyId &&
+      !db.guestCanAccessProject(req.user.sub, req.user.keyId, projectId)
+    ) {
+      return res.status(403).json({ error: "This key has no access to that Firebase project" });
     }
     const simSlot = Number(from ?? sim) === 2 ? 2 : 1;
     db.getFirebaseProject(req.user.sub, projectId);
@@ -1078,7 +1165,7 @@ app.delete("/api/telegram/groups/:chatId/auto-send", authMiddleware, guestRestri
   }
 });
 
-app.delete("/api/telegram/auto-send", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+app.delete("/api/telegram/auto-send", authMiddleware, guestRestrictions, requireOwnerOrKeyPerm("auto_send"), (req, res) => {
   try {
     const deviceId = req.query.deviceId || req.body?.deviceId;
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
@@ -1090,7 +1177,7 @@ app.delete("/api/telegram/auto-send", authMiddleware, guestRestrictions, require
   }
 });
 
-app.get("/api/telegram/auto-send/events", authMiddleware, guestRestrictions, requireOwner, (req, res) => {
+app.get("/api/telegram/auto-send/events", authMiddleware, guestRestrictions, requireOwnerOrKeyPerm("auto_send"), (req, res) => {
   try {
     const deviceId = req.query.deviceId || null;
     const events = db.listAutoSendEvents(req.user.sub, deviceId, Number(req.query.limit) || 20);
@@ -1196,6 +1283,10 @@ app.listen(port, () => {
   console.log(`DARK PANEL API running on port ${port}`);
   console.log(`Web Panel: http://localhost:${port}/`);
   console.log(`Admin key: ${process.env.ADMIN_KEY ? "SET" : "NOT SET - set ADMIN_KEY in .env"}`);
+  const jwt = process.env.JWT_SECRET || "";
+  if (!jwt || jwt.length < 24 || /change-me|DarkPanel2026_SecretKey/i.test(jwt)) {
+    console.warn("SECURITY: Set a strong random JWT_SECRET in .env (24+ chars)");
+  }
   console.log(`Global 2FA: ${isGlobal2FAEnabled() ? "ON" : "OFF"}`);
   try {
     const info = db.getDbInfo();

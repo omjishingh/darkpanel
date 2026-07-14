@@ -29,7 +29,15 @@ function createToken(user, extras = {}) {
   if (scope === "guest" && extras.guestSid && !payload.sid) {
     payload.sid = extras.guestSid;
   }
-  return jwt.sign(payload, getJwtSecret(), { expiresIn: "7d" });
+  // Guest JWT should not outlive the access key
+  let expiresIn = "7d";
+  if (scope === "guest" && extras.expiresAt) {
+    const leftMs = new Date(extras.expiresAt).getTime() - Date.now();
+    if (leftMs <= 0) throw new Error("Access key expired");
+    const secs = Math.max(60, Math.ceil(leftMs / 1000));
+    expiresIn = secs > 7 * 24 * 3600 ? "7d" : secs;
+  }
+  return jwt.sign(payload, getJwtSecret(), { expiresIn });
 }
 
 function authMiddleware(req, res, next) {
@@ -60,6 +68,7 @@ function authMiddleware(req, res, next) {
           return res.status(401).json({ error: "Access key expired" });
         }
         decoded.permissions = db.normalizePermissions(key.permissions);
+        decoded.projectIds = db.getAccessKeyProjectIds(userId, decoded.keyId);
       }
       try {
         db.touchSession(userId, sid);
@@ -91,6 +100,25 @@ function requireKeyPerm(perm) {
   };
 }
 
+/** Owner full access, or guest with given key permission */
+function requireOwnerOrKeyPerm(perm) {
+  return (req, res, next) => {
+    if (req.user?.scope !== "guest") return next();
+    return requireKeyPerm(perm)(req, res, next);
+  };
+}
+
+/** Guest may only touch Firebase projects listed on the key */
+function requireGuestProjectAccess(req, res, next) {
+  if (req.user?.scope !== "guest" || !req.user.keyId) return next();
+  const projectId = req.params.projectId || req.query.projectId || req.body?.projectId;
+  if (!projectId) return next();
+  if (!db.guestCanAccessProject(req.user.sub, req.user.keyId, projectId)) {
+    return res.status(403).json({ error: "This key has no access to that Firebase project" });
+  }
+  next();
+}
+
 function requireScope(...allowed) {
   const set = new Set(allowed);
   return (req, res, next) => {
@@ -117,6 +145,8 @@ module.exports = {
   authMiddleware,
   requireOwner,
   requireKeyPerm,
+  requireOwnerOrKeyPerm,
+  requireGuestProjectAccess,
   requireScope,
   getUserProject,
 };
