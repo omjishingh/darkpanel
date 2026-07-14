@@ -102,6 +102,22 @@ function requireScope(...allowed) {
   };
 }
 
+function isServerAdminUser(username) {
+  const hub = require("./serverHub");
+  return hub.isServerAdmin(username);
+}
+
+function requireServerAdmin(req, res, next) {
+  const hub = require("./serverHub");
+  if (!hub.isEnabled()) {
+    return res.status(403).json({ error: "Server Hub disabled on this host" });
+  }
+  if (!hub.isServerAdmin(req.user?.username)) {
+    return res.status(403).json({ error: "Server admin access required" });
+  }
+  next();
+}
+
 function getUserProject(req, res) {
   const userId = req.user.sub;
   const projectId = req.params.projectId || req.query.projectId;
@@ -118,5 +134,7 @@ module.exports = {
   requireOwner,
   requireKeyPerm,
   requireScope,
+  requireServerAdmin,
+  isServerAdminUser,
   getUserProject,
 };
