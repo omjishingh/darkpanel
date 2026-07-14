@@ -109,7 +109,7 @@ function createUser({ username, password, twoFactorEnabled = false, telegramChat
     sessions: [],
     accessKeys: [],
     keyActivity: [],
-    theme: { preset: "dark" },
+    theme: { preset: "creative" },
   };
   db.users[id] = user;
   writeDb(db);
@@ -230,15 +230,15 @@ function verifyUserPassword(username, password) {
   return user;
 }
 
-const THEME_PRESETS = new Set(["purple", "blue", "green", "rose", "dark"]);
+const THEME_PRESETS = new Set(["creative", "purple", "blue", "green", "rose", "dark"]);
 
 function normalizeTheme(theme) {
-  if (!theme || typeof theme !== "object") return { preset: "purple" };
+  if (!theme || typeof theme !== "object") return { preset: "creative" };
   const out = {};
   if (theme.preset && THEME_PRESETS.has(String(theme.preset))) {
     out.preset = String(theme.preset);
   } else {
-    out.preset = "purple";
+    out.preset = "creative";
   }
   if (theme.primary && /^#[0-9A-Fa-f]{6}$/.test(String(theme.primary).trim())) {
     out.primary = String(theme.primary).trim();
@@ -250,7 +250,7 @@ function ensureSecurityArrays(user) {
   if (!Array.isArray(user.sessions)) user.sessions = [];
   if (!Array.isArray(user.accessKeys)) user.accessKeys = [];
   if (!Array.isArray(user.keyActivity)) user.keyActivity = [];
-  if (!user.theme) user.theme = { preset: "purple" };
+  if (!user.theme) user.theme = { preset: "creative" };
 }
 
 function sanitizeUser(user) {

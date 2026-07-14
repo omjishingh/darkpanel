@@ -13,7 +13,7 @@
   let currentView = "overview";
   let deviceFilter = "all";
   let favorites = JSON.parse(localStorage.getItem("dp_favs") || "[]");
-  let currentTheme = { preset: "purple" };
+  let currentTheme = { preset: "creative" };
   let accessKeysCache = [];
   let guestPerms = {
     devices: true,
@@ -76,8 +76,8 @@
   }
 
   function applyTheme(theme) {
-    currentTheme = theme && typeof theme === "object" ? theme : { preset: "purple" };
-    const preset = currentTheme.preset || "purple";
+    currentTheme = theme && typeof theme === "object" ? theme : { preset: "creative" };
+    const preset = currentTheme.preset || "creative";
     document.documentElement.setAttribute("data-theme", preset);
     if (currentTheme.primary) {
       document.documentElement.style.setProperty("--primary", currentTheme.primary);
@@ -486,7 +486,7 @@
     localStorage.removeItem("dp_scope");
     localStorage.removeItem("dp_sid");
     stopRefresh();
-    applyTheme({ preset: "purple" });
+    applyTheme({ preset: "creative" });
     show("appView", false);
     show("authView", true);
     show("loginPanel", true);
@@ -606,7 +606,7 @@
     document.querySelectorAll(".theme-swatch").forEach((btn) => {
       btn.classList.toggle(
         "active",
-        btn.dataset.preset === (currentTheme.preset || "purple") && !currentTheme.primary
+        btn.dataset.preset === (currentTheme.preset || "creative") && !currentTheme.primary
       );
     });
   }
@@ -631,7 +631,7 @@
       try {
         const data = await api("/api/auth/theme", {
           method: "PATCH",
-          body: JSON.stringify({ primary, preset: currentTheme.preset || "purple" }),
+          body: JSON.stringify({ primary, preset: currentTheme.preset || "creative" }),
         });
         applyTheme(data.theme || { preset: currentTheme.preset, primary });
         toast("Custom color applied");
@@ -2065,5 +2065,6 @@
     } catch (e) { toast(e.message, true); }
   };
 
+  applyTheme({ preset: "creative" });
   initAuth();
 })();
