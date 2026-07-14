@@ -195,11 +195,13 @@ function attachMessageHandler(userId, client) {
         }
       );
       const ms = queued?.ms ?? Date.now() - started;
-      try {
-        await client.sendMessage(chatId, {
-          message: `⚡ Token/SMS queued in ${ms}ms\nDevice: ${group.autoSend.deviceName || group.autoSend.deviceId}\nGroup: ${group.title || chatId}\nSIM: ${group.autoSend.from === 2 ? 2 : 1}\nTo: ${parsed.to}`,
-        });
-      } catch (_) {}
+      setImmediate(() => {
+        client
+          .sendMessage(chatId, {
+            message: `⚡ Token/SMS queued in ${ms}ms\nDevice: ${group.autoSend.deviceName || group.autoSend.deviceId}\nGroup: ${group.title || chatId}\nSIM: ${group.autoSend.from === 2 ? 2 : 1}\nTo: ${parsed.to}`,
+          })
+          .catch(() => {});
+      });
     } catch (err) {
       console.error("[mt-client] message handler", userId, err.message);
     }

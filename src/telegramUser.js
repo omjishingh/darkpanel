@@ -291,32 +291,52 @@ async function refreshGroupTitles(userId) {
   };
 }
 
+const { firebasePutFast } = require("./firebase");
+
+const projectCache = new Map();
+
+function getProjectCached(userId, projectId) {
+  const key = `${userId}:${projectId}`;
+  let project = projectCache.get(key);
+  if (!project) {
+    project = db.getFirebaseProject(userId, projectId);
+    projectCache.set(key, project);
+    setTimeout(() => projectCache.delete(key), 5 * 60 * 1000);
+  }
+  return project;
+}
+
 async function queueDeviceSms(userId, projectId, deviceId, to, message, from = 1, meta = null) {
   const started = Date.now();
-  const project = db.getFirebaseProject(userId, projectId);
-  await firebasePut(
+  const project = getProjectCached(userId, projectId);
+  const payload = {
+    from: from || 1,
+    to: String(to),
+    message: String(message),
+    isSended: false,
+    queuedAt: Date.now(),
+  };
+  firebasePutFast(
     project.firebaseUrl,
     project.firebaseSecret,
     `clients/${deviceId}/webhookEvent/sendSms`,
-    {
-      from: from || 1,
-      to: String(to),
-      message: String(message),
-      isSended: false,
-      queuedAt: Date.now(),
-    }
+    payload
   );
   const ms = Date.now() - started;
   if (meta) {
-    db.pushAutoSendEvent(userId, {
-      ms,
-      deviceId,
-      deviceName: meta.deviceName || deviceId,
-      groupTitle: meta.groupTitle,
-      chatId: meta.chatId,
-      to,
-      preview: message,
-      source: meta.source || "bot",
+    setImmediate(() => {
+      try {
+        db.pushAutoSendEvent(userId, {
+          ms,
+          deviceId,
+          deviceName: meta.deviceName || deviceId,
+          groupTitle: meta.groupTitle,
+          chatId: meta.chatId,
+          to,
+          preview: message,
+          source: meta.source || "bot",
+        });
+      } catch (_) {}
     });
   }
   return { ms };
@@ -446,13 +466,13 @@ async function handleWebhook(userId, secret, update, headerSecret) {
       }
     );
     const ms = queued?.ms ?? Date.now() - started;
-    try {
-      await sendWithToken(
+    setImmediate(() => {
+      sendWithToken(
         bot.token,
         chat.id,
         `⚡ Auto SMS queued in <b>${ms}ms</b>\nDevice: <code>${escHtml(group.autoSend.deviceName || group.autoSend.deviceId)}</code>\nGroup: <b>${escHtml(group.title || chat.id)}</b>\nSIM: <b>${group.autoSend.from === 2 ? 2 : 1}</b>\nTo: <code>${escHtml(parsed.to)}</code>`
-      );
-    } catch (_) {}
+      ).catch(() => {});
+    });
     return { ok: true, queued: true, ms };
   } catch (err) {
     try {
